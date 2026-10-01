@@ -4,7 +4,7 @@ import random
 import polars as pl
 import pytest
 
-from helpers import ALL_MODES, COLUMNWISE, EXACT, NAN, df, run
+from .helpers import ALL_MODES, COLUMNWISE, EXACT, NAN, df, run
 
 
 # ------------------------------------------------------------------ nulos

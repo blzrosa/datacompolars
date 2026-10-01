@@ -88,7 +88,7 @@ class CompareSettings(BaseModel):
                 raise ValueError("tolerâncias devem ser números finitos e >= 0")
         return v
 
-    @field_validator("window_rows")
+    @field_validator("window_rows", mode="before")
     @classmethod
     def _valid_window_rows(cls, v: Union[int, str, None]) -> Union[int, str, None]:
         if isinstance(v, bool):

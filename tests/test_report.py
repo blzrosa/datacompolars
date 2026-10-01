@@ -6,7 +6,7 @@ import pytest
 
 from benchmarks.datagen import DatasetSpec, generate
 from datacompolars import CompareSettings, ReportSettings, compare
-from helpers import df, run
+from .helpers import df, run
 
 FORMATS = ["text", "markdown", "html", "json"]
 
