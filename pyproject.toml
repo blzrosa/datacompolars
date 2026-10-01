@@ -1,0 +1,43 @@
+[project]
+name = "datacompolars"
+version = "0.1.0"
+description = "Comparação de DataFrames/arquivos em Polars, com hash de linha, janelas por PK e relatório completo."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "polars>=1.30",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+# Leitura de SAS (.sas7bdat/.xpt). A GERAÇÃO de .xpt nos benchmarks também usa pyreadstat + pandas.
+sas = [
+    "polars-readstat",
+    "pyreadstat",
+    "pandas",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "psutil>=5.9",
+    "datacompy>=0.16",   # baseline dos benchmarks
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datacompolars"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "sas: testes que exigem polars-readstat/pyreadstat",
+    "slow: testes mais lentos (datasets maiores)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:datacompy.*",
+]
