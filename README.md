@@ -16,21 +16,6 @@ datacompolars/
    └─ run.py           # benchmark datacompy x datacompolars
 ```
 
-## pyproject.toml (alterações)
-
-```toml
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
-pythonpath = ["tests", "."]      # `from helpers import ...` e `from benchmarks.datagen import ...`
-markers = [
-    "sas: testes que exigem polars-readstat/pyreadstat",
-    "slow: testes mais lentos (datasets maiores)",
-]
-```
-
-`pytest-benchmark` deixa de ser necessário (o `run.py` mede em subprocessos). Dev deps: `pytest`, `psutil`, `datacompy`.
-
 ## Comandos
 
 ```powershell

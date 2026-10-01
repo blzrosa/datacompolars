@@ -34,6 +34,7 @@ packages = ["src/datacompolars"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["tests", "."]      # `from helpers import ...` e `from benchmarks.datagen import ...`
 markers = [
     "sas: testes que exigem polars-readstat/pyreadstat",
     "slow: testes mais lentos (datasets maiores)",
