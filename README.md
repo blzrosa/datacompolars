@@ -12,10 +12,12 @@ Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, m
 - [Início rápido](#início-rápido)
 - [Como funciona](#como-funciona)
 - [API](#api)
+- [Configuração](#configuração)
 - [Exemplo de relatório](#exemplo-de-relatório)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Testes](#testes)
 - [Benchmarks](#benchmarks)
+- [Licença](#licença)
 
 ## Instalação
 
@@ -93,29 +95,10 @@ O caminho escolhido e o motivo aparecem no relatório (seção *Execution*) e em
 | Parâmetro | Tipo | Descrição |
 |---|---|---|
 | `left`, `right` | caminho, pasta/glob de parquet, `pl.DataFrame` ou `pl.LazyFrame` | As duas fontes. |
-| `settings` | `CompareSettings` ou `dict` | Configuração da comparação. Um `dict` é convertido com `CompareSettings(**settings)`. |
-| `source` | `SourceOptions` (opcional) | Opções de leitura dos arquivos (parquet/csv/sas). |
+| `settings` | [`CompareSettings`](#comparesettings) ou `dict` | Configuração da comparação. Um `dict` é convertido com `CompareSettings(**settings)`. |
+| `source` | [`SourceOptions`](#sourceoptions) (opcional) | Opções de leitura dos arquivos (parquet/csv/sas). |
 
-### `CompareSettings`
-
-Modelo Pydantic. Campos usados pelo motor:
-
-| Campo | Descrição |
-|---|---|
-| `join_columns` | Colunas da chave primária. A **primeira** é usada para o janelamento. |
-| `left_name`, `right_name` | Rótulos dos dois lados, usados no relatório. |
-| `lowercase_columns` | Normaliza nomes de colunas para minúsculas antes de alinhar os schemas. |
-| `abs_tol`, `rel_tol` | Tolerância absoluta/relativa. Aceita um `float` (todas as colunas) ou `dict[str, float]` (por coluna). |
-| `ignore_spaces`, `ignore_case` | Opções de comparação para strings. |
-| `custom_comparators` | `dict[str, BaseComparator]` com comparadores por coluna (ver `comparators.py`). |
-| `casting` | Política de conversão de tipos ao alinhar os schemas. |
-| `check_duplicate_keys` | Verifica chave duplicada em cada lado antes de comparar. |
-| `column_details` | Calcula divergências por coluna e amostras. Desligado, o motor só informa contagens de linhas. |
-| `sample_count` | Máximo de linhas de amostra por coluna divergente. |
-| `columns_per_batch` | Tamanho do lote de colunas no caminho `columnwise`. |
-| `window_rows` | Linhas por janela. `None` = janela única; um inteiro fixa o tamanho; o modo automático decide pelo tamanho dos dados. Ignorado (com aviso) se a 1ª coluna da chave não for inteira. |
-
-A referência completa de tipos e valores padrão está em [`src/datacompolars/settings.py`](src/datacompolars/settings.py).
+> `CompareSettings` e `SourceOptions` estão documentados na seção [Configuração](#configuração).
 
 ### `ComparisonResult`
 
@@ -140,16 +123,170 @@ Em `datacompolars.report`. Renderiza o relatório, salva em UTF-8 se `save_path`
 
 Formatos: `text`, `markdown`, `html` e `json`. O conteúdo é montado uma única vez (`build_blocks`) e cada renderizador só decide a apresentação.
 
-| Campo de `ReportSettings` | Descrição |
-|---|---|
-| `save_path` | Se definido, grava o relatório nesse caminho (cria as pastas que faltarem). |
-| `print_output` | Imprime o relatório no stdout. |
-| `style` | Texto: `unicode`, `ascii` ou `auto`. O modo `auto` cai para ASCII se o terminal não suportar os caracteres. |
-| `width` | Largura do relatório em texto. |
-| `max_columns` | Máximo de colunas na tabela *Differences by column* (texto e Markdown). |
-| `max_sample_columns` | Máximo de colunas com amostras (texto e Markdown). |
+Todas as opções do `ReportSettings` estão em [Configuração](#reportsettings).
 
 HTML e JSON sempre trazem **tudo**, sem os limites acima. O HTML é um arquivo único, sem dependências externas, com tema claro/escuro automático.
+
+## Configuração
+
+Tudo que o usuário controla passa por três modelos Pydantic, definidos em [`settings.py`](src/datacompolars/settings.py):
+
+| Modelo | Controla | Onde é usado |
+|---|---|---|
+| [`CompareSettings`](#comparesettings) | **Como comparar** (chave, tolerâncias, tipos, desempenho) | 3º argumento de `compare()` |
+| [`SourceOptions`](#sourceoptions) | **Como abrir arquivos** (formato, separador do CSV etc.) | `source=` de `compare()` |
+| [`ReportSettings`](#reportsettings) | **Como apresentar o relatório** (formato, largura, destino) | 2º argumento de `emit()` |
+
+Os três usam `extra="forbid"`: um parâmetro com nome errado levanta `ValidationError` em vez de ser ignorado silenciosamente. Onde `compare()` aceita `CompareSettings`, também aceita um `dict` equivalente.
+
+```python
+from datacompolars import CompareSettings, ReportSettings, SourceOptions, compare
+from datacompolars.report import emit
+
+result = compare(
+    "dados/producao.csv",
+    "dados/homologacao.csv",
+    CompareSettings(
+        join_columns=["id"],
+        left_name="producao",
+        right_name="homologacao",
+        abs_tol={"valor": 0.01},      # tolerância só na coluna "valor"
+        ignore_case=True,
+        sample_count=10,
+    ),
+    source=SourceOptions(csv_separator=";"),
+)
+
+emit(result, ReportSettings(save_path="reports/comparacao.html", print_output=False))
+```
+
+### `CompareSettings`
+
+#### Chave e rótulos
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `join_columns` | *obrigatório* | Colunas da chave primária (PK) do join. Precisa ter ao menos uma. A **primeira** é usada para o janelamento e, nesse caso, precisa ser inteira. |
+| `left_name` | `"left"` | Rótulo do lado esquerdo no relatório. |
+| `right_name` | `"right"` | Rótulo do lado direito no relatório. |
+
+#### Alinhamento de schemas
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `lowercase_columns` | `True` | Compara nomes de colunas sem diferenciar caixa. Normaliza para minúsculas os nomes de colunas, a chave, as tolerâncias por coluna e os comparadores customizados. |
+| `casting` | `"none"` | O que fazer quando a mesma coluna tem tipos diferentes nos dois lados (ver tabela abaixo). |
+
+Valores de `casting`:
+
+| Valor | Efeito |
+|---|---|
+| `"none"` | Só reporta. A coluna com tipos divergentes é listada no relatório e **não é comparada**. Se o tipo divergente for de uma coluna da **chave**, é erro fatal. |
+| `"left"` | Converte a coluna da direita para o tipo da esquerda. |
+| `"right"` | Converte a coluna da esquerda para o tipo da direita. |
+
+#### Regras de igualdade
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `abs_tol` | `0.0` | Tolerância absoluta. Um `float` vale para todas as colunas; um `dict[str, float]` define por coluna. |
+| `rel_tol` | `0.0` | Tolerância relativa, com o mesmo formato de `abs_tol`. |
+| `ignore_spaces` | `False` | Ignora espaços em branco em strings. |
+| `ignore_case` | `False` | Ignora maiúsculas/minúsculas em strings. |
+| `custom_comparators` | `{}` | `dict[str, BaseComparator]` com um comparador próprio por coluna, por exemplo `{"valor": MeuComparador()}`. Veja `comparators.py`. Não pode conter colunas da chave. |
+
+Nulo com nulo é sempre igual; nulo de um lado só é diferença.
+
+#### Integridade da chave
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `check_duplicate_keys` | `True` | Valida a unicidade da PK em cada lado. Se encontrar duplicatas, a comparação é **abortada** (`result.aborted`). Desligado, e havendo duplicatas, as contagens ficam infladas. |
+
+#### Nível de detalhe
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `column_details` | `True` | Calcula as divergências por coluna e as amostras. No caminho `hash`, custa uma leitura extra das janelas que têm divergência. Desligue para apenas contar linhas. |
+| `sample_count` | `5` | Máximo de linhas de amostra por coluna divergente. `0` desativa as amostras. |
+
+#### Desempenho e memória
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `columns_per_batch` | `50` | Quantas colunas são avaliadas por lote no caminho `columnwise`. Reduza se faltar memória em tabelas muito largas. |
+| `window_rows` | `"auto"` | Janelas de execução por faixa da 1ª coluna da PK (veja abaixo). |
+
+**`window_rows`** controla o fatiamento da comparação:
+
+| Valor | Efeito |
+|---|---|
+| `"auto"` | Liga as janelas acima de **20 milhões de linhas**, com janelas de ~**10 milhões** (constantes `AUTO_WINDOW_THRESHOLD_ROWS` e `AUTO_WINDOW_ROWS` em `settings.py`). Abaixo disso, usa janela única. |
+| inteiro `> 0` | Força janelas desse tamanho. |
+| `None` | Desliga o janelamento (janela única). |
+
+A mesma chave cai sempre na mesma janela, então o pico de memória passa a depender do tamanho da janela, não do dataset. Se a 1ª coluna da chave não for inteira, o janelamento é ignorado e o motor emite um aviso. Para referência, no benchmark de 30M linhas × 50 colunas a query única de hash usou cerca de 3,7 GB.
+
+#### Validações
+
+O `CompareSettings` recusa configurações inválidas na criação:
+
+- `join_columns` vazio, com nomes em branco ou com colunas repetidas (sem diferenciar caixa);
+- `abs_tol` / `rel_tol` negativos, `NaN` ou infinitos (inclusive dentro do `dict`);
+- `window_rows` igual a zero, negativo, `bool` ou uma string diferente de `"auto"`;
+- `sample_count < 0` ou `columns_per_batch <= 0`;
+- `custom_comparators` contendo colunas da chave.
+
+#### Qual caminho de comparação será usado
+
+O método `uses_exact_hash()` informa se a comparação pode usar o **hash de linha** (mais rápido). Ele devolve `False`, e o motor usa o caminho `columnwise`, se qualquer uma destas opções estiver ativa:
+
+| Opção | Faz o motor usar `columnwise` quando... |
+|---|---|
+| `abs_tol` / `rel_tol` | algum valor for diferente de zero (global ou por coluna) |
+| `ignore_spaces` | for `True` |
+| `ignore_case` | for `True` |
+| `custom_comparators` | tiver ao menos um comparador |
+
+Colunas aninhadas (não hasheáveis) também forçam `columnwise`. O caminho escolhido e o motivo aparecem no relatório e em `result.execution`.
+
+### `SourceOptions`
+
+Como abrir arquivos. Só afeta fontes dadas como caminho; `pl.DataFrame` e `pl.LazyFrame` não são alterados.
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `format` | `None` | Força o formato: `"parquet"`, `"csv"` ou `"sas"`. Por padrão, é deduzido da extensão do arquivo. |
+| `csv_infer_schema_length` | `10_000` | Linhas usadas para inferir os tipos do CSV. `None` lê o arquivo inteiro (mais lento, porém mais seguro se os tipos mudam ao longo do arquivo). |
+| `csv_separator` | `","` | Separador do CSV. Precisa ter exatamente 1 caractere. |
+| `recursive` | `True` | Ao receber um diretório, procura arquivos também nas subpastas. |
+
+A leitura de SAS exige o extra opcional: `uv sync --extra sas`.
+
+### `ReportSettings`
+
+Como apresentar o relatório. É passado a `emit()`.
+
+| Campo | Padrão | Descrição |
+|---|---|---|
+| `print_output` | `True` | Imprime o relatório no console. |
+| `format` | `None` | `"text"`, `"markdown"`, `"html"` ou `"json"`. Se `None`, é deduzido da extensão de `save_path` (veja abaixo); sem `save_path`, usa `"text"`. |
+| `save_path` | `None` | Salva o relatório neste arquivo (UTF-8). |
+| `style` | `"auto"` | Bordas e barras do formato texto: `"unicode"`, `"ascii"` ou `"auto"` (cai para ASCII se o console não suportar unicode). |
+| `width` | `100` | Largura do formato texto. Aceita de 60 a 200. |
+| `max_columns` | `20` | Máximo de colunas divergentes listadas na tabela *Differences by column* (texto e Markdown). |
+| `max_sample_columns` | `10` | Máximo de colunas com tabela de amostras (texto e Markdown). `0` oculta as amostras. |
+
+Dedução do formato a partir de `save_path` (quando `format` é `None`):
+
+| Extensão | Formato |
+|---|---|
+| `.md`, `.markdown` | `markdown` |
+| `.html`, `.htm` | `html` |
+| `.json` | `json` |
+| qualquer outra | `text` |
+
+`max_columns`, `max_sample_columns` e `width` só valem para texto e Markdown. HTML e JSON sempre trazem **tudo**.
 
 ## Exemplo de relatório
 
@@ -263,9 +400,11 @@ datacompolars/
 │  ├─ windows.py           # planejamento de janelas por PK
 │  └─ comparators.py       # comparadores numérico, string e lista
 ├─ tests/
+│  ├─ __init__.py
 │  ├─ helpers.py
 │  ├─ test_engine.py  test_windows.py  test_schema_settings.py  test_report.py
 └─ benchmarks/
+   ├─ __init__.py
    ├─ datagen.py           # gerador de dados (módulo + CLI)
    ├─ run.py               # benchmark datacompy x datacompolars
    └─ results/             # saídas dos benchmarks
@@ -300,3 +439,7 @@ uv run python benchmarks/run.py data/1000000_50cols_div1pct
 uv run python benchmarks/run.py data/30000000_50cols_div1pct --engines hash,hash_windows --repeats 2 --window-rows 5_000_000
 uv run python benchmarks/run.py data/5000000_100cols_div1pct --engines hash_windows --repeats 2 --window-rows 100_000 --min-free-gb 0
 ```
+
+## Licença
+
+Distribuído sob a [Apache License 2.0](LICENSE).

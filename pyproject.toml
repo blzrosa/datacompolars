@@ -1,13 +1,48 @@
 [project]
 name = "datacompolars"
-version = "0.1.0"
-description = "Comparação de DataFrames/arquivos em Polars, com hash de linha, janelas por PK e relatório completo."
+version = "0.2.1"
+description = "Comparação de DataFrames/arquivos em Polars escalável - com hash de linha, janelas por PK e relatório completo."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Nini (B. L. Z. Rosa)", email = "vblzrosa@gmail.com" },
+]
+keywords = [
+    "polars",
+    "dataframe",
+    "compare",
+    "diff",
+    "reconciliation",
+    "data-quality",
+    "datacompy",
+    "parquet",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
 dependencies = [
     "polars>=1.30",
     "pydantic>=2.7",
 ]
+
+[project.urls]
+Homepage = "https://github.com/blzrosa/datacompolars"
+Repository = "https://github.com/blzrosa/datacompolars"
+Issues = "https://github.com/blzrosa/datacompolars/issues"
 
 [project.optional-dependencies]
 # Leitura de SAS (.sas7bdat/.xpt). A GERAÇÃO de .xpt nos benchmarks também usa pyreadstat + pandas.
@@ -25,11 +60,27 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+# >=1.27 é necessário para `license` (SPDX) e `license-files` (PEP 639)
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/datacompolars"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/benchmarks",
+    "/examples",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+]
+exclude = [
+    "/benchmarks/results",
+    "**/__pycache__",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
