@@ -19,6 +19,9 @@ Engines:
     hash_windows        caminho exato, janelas por faixa de PK (--window-rows)
     columnwise          comparadores por coluna (abs_tol), janela única
     columnwise_windows  comparadores por coluna, janelas por faixa de PK
+    <engine>_common     o mesmo da engine, com common_keys_only=True (restringe às chaves em comum);
+                        ex.: hash_common, hash_windows_common. Compare com a engine sem o sufixo em datasets
+                        gerados com `datagen.py --id-overlap` ou `--only-left/--only-right`.
 """
 from __future__ import annotations
 
@@ -36,13 +39,17 @@ import psutil
 
 MB = 1024 * 1024
 GB = 1024 * MB
-ALL_ENGINES = ("datacompy", "hash", "hash_windows", "columnwise", "columnwise_windows")
+BASE_ENGINES = ("hash", "hash_windows", "columnwise", "columnwise_windows")
+ALL_ENGINES = ("datacompy", *BASE_ENGINES, *(f"{e}_common" for e in BASE_ENGINES))
 
 
 def engine_kwargs(engine: str, window_rows: int) -> Dict[str, Any]:
-    kw: Dict[str, Any] = {"window_rows": window_rows if engine.endswith("_windows") else None}
-    if engine.startswith("columnwise"):
+    parts = engine.split("_")
+    kw: Dict[str, Any] = {"window_rows": window_rows if "windows" in parts else None}
+    if parts[0] == "columnwise":
         kw["abs_tol"] = 1e-12  # qualquer tolerância > 0 tira o motor do caminho de hash
+    if "common" in parts:
+        kw["common_keys_only"] = True
     return kw
 
 
@@ -177,13 +184,13 @@ def run_case(ds: Path, engine: str, args: argparse.Namespace, max_rss: int, min_
 
 
 def print_table(rows: List[Dict[str, Any]]) -> None:
-    head = f"{'dataset':<28}{'engine':<20}{'min s':>8}{'med s':>8}{'Δ MB':>8}{'pico MB':>9}{'jan.':>5}{'ok':>4}  nota"
+    head = f"{'dataset':<28}{'engine':<27}{'min s':>8}{'med s':>8}{'Δ MB':>8}{'pico MB':>9}{'jan.':>5}{'ok':>4}  nota"
     print("\n" + head + "\n" + "-" * len(head))
     for r in rows:
         note = r.get("killed") or r.get("error") or ""
         ok = {True: "✓", False: "✗", None: "-"}[r.get("ok")]
         print(
-            f"{r['dataset']:<28}{r['engine']:<20}"
+            f"{r['dataset']:<28}{r['engine']:<27}"
             f"{r.get('min_s', '-'):>8}{r.get('median_s', '-'):>8}{r.get('delta_mb', '-'):>8}"
             f"{r.get('peak_mb', '-'):>9}{str(r.get('windows') or '-'):>5}{ok:>4}  {note}"
         )

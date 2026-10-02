@@ -5,9 +5,13 @@ Fluxo (decidido pelos benchmarks de memória/tempo):
   1. abre as fontes (lazy), normaliza nomes, alinha schemas (schema.py) e escolhe o caminho;
   2. planeja janelas por faixa da 1ª coluna da PK (windows.py) -- o pico de memória passa a
      depender do tamanho da janela, não do dataset;
+     (common_keys_only: se a 1ª coluna é inteira, só a interseção das faixas de ids dos dois lados
+     é comparada; as chaves fora dela não têm par e são apenas contadas, lendo só a coluna da chave);
   3. para cada janela (a mesma chave cai sempre na mesma janela, então os resultados somam):
        a. checa PK duplicada (group_by só da chave, sequencial: rodar junto com o join multiplica a memória);
-       b. caminho "hash":     UMA query de full join (chave + hash por coluna + flag) -> contagens e nº de divergentes;
+       a'. (common_keys_only) varre só as chaves, materializa as chaves em comum e filtra os dois lados
+          com semi join; só essas linhas seguem. Exclusivas = total - em comum;
+       b. caminho "hash":     UMA query de join (chave + hash por coluna + flag) -> contagens e nº de divergentes;
           caminho "columnwise": join de chaves + comparadores por coluna em lotes;
        c. detalhes (opcional): no hash, só se a janela tem divergência, relê SÓ as linhas divergentes
           (semi join nas chaves divergentes) para contar por coluna e coletar amostras.
@@ -35,7 +39,7 @@ from .results import (
 )
 from .schema import SchemaAlignment, align_schemas, normalize_schema
 from .settings import AUTO_WINDOW_ROWS, AUTO_WINDOW_THRESHOLD_ROWS, CompareSettings, SourceOptions
-from .windows import PkStats, Window, pk_stats, plan_windows, resolve_window_rows
+from .windows import PkStats, Window, key_overlap, pk_stats, plan_windows, resolve_window_rows
 
 _IN_L, _IN_R = "__in_l", "__in_r"
 _H_L, _H_R = "__h_l", "__h_r"
@@ -69,6 +73,12 @@ class _Comparison:
         self.aln: Optional[SchemaAlignment] = None
         self.path: Optional[str] = None
         self.path_reason = ""
+        # common_keys_only: com as duas tabelas já restritas às chaves comuns, o join é inner.
+        self._how = "inner" if settings.common_keys_only else "full"
+        # Linhas de chave não nula fora da interseção das faixas (só com common_keys_only): sem par possível.
+        self._outside_l: Optional[pl.LazyFrame] = None
+        self._outside_r: Optional[pl.LazyFrame] = None
+        self._outside_n = (0, 0)
 
         lower = settings.lowercase_columns
         self.pk = [c.lower() if lower else c for c in settings.join_columns]
@@ -157,6 +167,11 @@ class _Comparison:
                 for w in windows:
                     dup_l += self._duplicates(self._window(self.left, w))
                     dup_r += self._duplicates(self._window(self.right, w))
+                # fora da interseção das faixas não há janela, mas a unicidade da PK vale para a tabela toda
+                if self._outside_l is not None:
+                    dup_l += self._duplicates(self._outside_l)
+                if self._outside_r is not None:
+                    dup_r += self._duplicates(self._outside_r)
             if dup_l:
                 self.fatal.append(f"Duplicate join keys in the left table: {dup_l:,} surplus rows")
             if dup_r:
@@ -164,7 +179,7 @@ class _Comparison:
             if self.fatal:
                 return self._result(aborted=True, windows=len(windows), rows_per_window=rows_per_window)
 
-        tot = {"only_left": 0, "only_right": 0, "both": 0, "mismatch": 0}
+        tot = {"only_left": self._outside_n[0], "only_right": self._outside_n[1], "both": 0, "mismatch": 0}
         col_counts: Dict[str, int] = defaultdict(int)
         samples: Dict[str, List[List[Any]]] = {}
         details = s.column_details
@@ -173,12 +188,24 @@ class _Comparison:
             lw, rw = self._window(self.left, w), self._window(self.right, w)
             subset: Optional[pl.DataFrame] = None
             counts: Dict[str, int] = {}
+            only_l = only_r = 0
+
+            if s.common_keys_only:
+                with self._timed("keys"):
+                    restricted_l, restricted_r, only_l, only_r = self._restrict_to_common(lw, rw)
+                if restricted_l is None or restricted_r is None:  # nenhuma chave em comum nesta janela
+                    tot["only_left"] += only_l
+                    tot["only_right"] += only_r
+                    continue
+                lw, rw = restricted_l, restricted_r
 
             with self._timed("compare"):
                 if self.path == "hash":
                     stats = self._membership(lw, rw, with_hash=True)
                 else:
                     stats = self._membership(lw, rw, with_hash=False)
+            if s.common_keys_only:  # lw/rw só têm chaves em comum: as exclusivas vieram da varredura de chaves
+                stats["only_left"], stats["only_right"] = only_l, only_r
 
             if self.path == "hash":
                 if details and stats["mismatch"] > 0:
@@ -212,7 +239,8 @@ class _Comparison:
     def _plan_windows(self) -> Tuple[List[Window], Optional[int]]:
         assert self.aln is not None
         setting = self.s.window_rows
-        if setting is None:
+        ranged = self.s.common_keys_only
+        if setting is None and not ranged:
             return [Window(index=0)], None
         pk0 = self.pk[0]
         if not (self.aln.left_schema[pk0].is_integer() and self.aln.right_schema[pk0].is_integer()):
@@ -226,7 +254,35 @@ class _Comparison:
         rows = resolve_window_rows(
             setting, ls, rs, threshold=AUTO_WINDOW_THRESHOLD_ROWS, auto_rows=AUTO_WINDOW_ROWS
         )
-        return plan_windows(ls, rs, rows), rows
+        if not ranged:
+            return plan_windows(ls, rs, rows), rows
+
+        # common_keys_only: só a interseção das faixas de ids precisa ser comparada
+        bounds = key_overlap(ls, rs)
+        self._outside_l, n_l = self._outside_of(self.left, ls, bounds)
+        self._outside_r, n_r = self._outside_of(self.right, rs, bounds)
+        self._outside_n = (n_l, n_r)
+        if bounds is None:
+            # nenhuma chave não nula em comum; as chaves nulas (que casam entre si) ainda passam por uma janela
+            return ([Window(index=0, null_keys=True)] if (ls.nulls or rs.nulls) else []), rows
+        return plan_windows(ls, rs, rows, bounds=bounds), rows
+
+    def _outside_of(
+        self, lf: pl.LazyFrame, st: PkStats, bounds: Optional[Tuple[int, int]]
+    ) -> Tuple[Optional[pl.LazyFrame], int]:
+        """Linhas de chave não nula fora de `bounds` (frame lazy, contagem). Só a coluna da chave é lida."""
+        non_null = st.n - st.nulls
+        if non_null == 0 or st.lo is None or st.hi is None:
+            return None, 0
+        key = pl.col(self.pk[0])
+        if bounds is None:  # sem faixa em comum: toda chave não nula está fora
+            return lf.filter(key.is_not_null()), non_null
+        lo, hi = bounds
+        if st.lo >= lo and st.hi <= hi:  # esse lado está inteiro dentro da faixa: nada a contar
+            return None, 0
+        outside = lf.filter(key.is_not_null() & ((key < lo) | (key > hi)))
+        n = int(outside.select(pl.len()).collect(engine="streaming").item())
+        return outside, n
 
     def _window(self, lf: pl.LazyFrame, w: Window) -> pl.LazyFrame:
         pred = w.predicate(self.pk[0])
@@ -252,12 +308,42 @@ class _Comparison:
         return lf.select(exprs)
 
     def _joined(self, lw: pl.LazyFrame, rw: pl.LazyFrame, with_hash: bool) -> pl.LazyFrame:
-        return self._side(lw, _IN_L, _H_L if with_hash else None).join(
-            self._side(rw, _IN_R, _H_R if with_hash else None),
-            on=self.pk,
-            how="full",
-            coalesce=False,
-            nulls_equal=True,
+        left = self._side(lw, _IN_L, _H_L if with_hash else None)
+        right = self._side(rw, _IN_R, _H_R if with_hash else None)
+        if self._how == "inner":  # common_keys_only: lw/rw só têm chaves em comum
+            return left.join(right, on=self.pk, how="inner", nulls_equal=True)
+        return left.join(right, on=self.pk, how="full", coalesce=False, nulls_equal=True)
+
+    def _restrict_to_common(
+        self, lw: pl.LazyFrame, rw: pl.LazyFrame
+    ) -> Tuple[Optional[pl.LazyFrame], Optional[pl.LazyFrame], int, int]:
+        """common_keys_only: restringe a janela às chaves presentes nos dois lados.
+
+        Uma varredura só das colunas da chave conta as linhas de cada lado e materializa as chaves em
+        comum (só chaves: ~janela x largura da PK). Depois, um semi join filtra os dois lados, e é só nessas
+        linhas que o hash/os comparadores trabalham. Devolve (lw, rw, só_esquerda, só_direita); lw e rw
+        são None quando não há chave em comum. Exclusivas = total - em comum (pressupõe chaves únicas).
+        """
+        pk = self.pk
+        lk, rk = lw.select(pk), rw.select(pk)
+        n_l, n_r, common = pl.collect_all(
+            [
+                lk.select(pl.len().alias("n")),
+                rk.select(pl.len().alias("n")),
+                lk.join(rk, on=pk, how="semi", nulls_equal=True),
+            ],
+            engine="streaming",
+        )
+        n_common = common.height
+        only_l, only_r = int(n_l.item()) - n_common, int(n_r.item()) - n_common
+        if n_common == 0:
+            return None, None, only_l, only_r
+        keys = common.lazy()
+        return (
+            lw.join(keys, on=pk, how="semi", nulls_equal=True),
+            rw.join(keys, on=pk, how="semi", nulls_equal=True),
+            only_l,
+            only_r,
         )
 
     @staticmethod
@@ -441,6 +527,7 @@ class _Comparison:
             path_reason=self.path_reason,
             windows=windows,
             rows_per_window=rows_per_window,
+            common_keys_only=s.common_keys_only,
             column_details_computed=bool(s.column_details and not aborted),
             polars_version=pl.__version__,
             total_seconds=round(total_s, 4),

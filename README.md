@@ -96,6 +96,24 @@ O caminho escolhido e o motivo aparecem no relatório (seção *Execution*) e em
 - **Colunas com tipos diferentes:** são listadas no relatório e **não comparadas**, a menos que o `casting` do `CompareSettings` resolva o alinhamento.
 - **Nomes de colunas:** com `lowercase_columns`, nomes de colunas, chave, tolerâncias e comparadores customizados são normalizados para minúsculas.
 
+### Ids muito diferentes (`common_keys_only`)
+
+Por padrão, cada janela faz um *full join* que carrega as linhas dos dois lados, inclusive as sem par (e, no caminho `hash`, calcula o hash de linha de todas elas). Quando as tabelas têm **poucos ids em comum**, ligue `common_keys_only=True`:
+
+1. Se a 1ª coluna da chave é inteira, só a **interseção das faixas** de ids dos dois lados (`[max(mínimos), min(máximos)]`) é dividida em janelas. As chaves fora dela não podem ter par e são apenas contadas, lendo só a coluna da chave; em parquet, o predicado de faixa poda row groups.
+2. Em cada janela, uma varredura **só das colunas da chave** encontra as chaves em comum e um *semi join* filtra os dois lados. O hash e os comparadores processam apenas essas linhas, com *inner join*.
+3. As linhas exclusivas continuam no relatório: só esquerda = total da esquerda − em comum (idem à direita).
+
+O resultado é o mesmo do modo padrão; muda só o custo. Pontos de atenção:
+
+- A contagem de exclusivas pressupõe chaves únicas. `check_duplicate_keys` (padrão) garante isso, inclusive fora da interseção; com ele desligado e havendo duplicatas, as contagens já eram infladas.
+- Com muita sobreposição de ids a flag só acrescenta uma varredura das chaves, por isso é opt-in.
+- O semi join, sozinho, não evita ler as colunas de valor (o filtro é aplicado depois da leitura). Quem reduz a leitura é a restrição por faixa, que rende mais quando as faixas de ids diferem; com sobreposição espalhada, o ganho vem de não hashear nem comparar as linhas sem par.
+- As chaves em comum de cada janela ficam em memória (só as colunas da chave).
+- Chaves nulas casam entre si, como no modo padrão.
+
+O ganho depende de quanto os ids se sobrepõem e de quantas colunas a tabela tem; meça com os [benchmarks](#benchmarks) (`--id-overlap` e as engines `*_common`).
+
 ## API
 
 ### `compare(left, right, settings, source=None) -> ComparisonResult`
@@ -224,6 +242,7 @@ Nulo com nulo é sempre igual; nulo de um lado só é diferença.
 |---|---|---|
 | `columns_per_batch` | `50` | Quantas colunas são avaliadas por lote no caminho `columnwise`. Reduza se faltar memória em tabelas muito largas. |
 | `window_rows` | `"auto"` | Janelas de execução por faixa da 1ª coluna da PK (veja abaixo). |
+| `common_keys_only` | `False` | Restringe a comparação às chaves presentes nos dois lados e, com PK inteira, à interseção das faixas de ids. Para tabelas com ids muito diferentes; veja [Ids muito diferentes](#ids-muito-diferentes-common_keys_only). |
 
 **`window_rows`** controla o fatiamento da comparação:
 
@@ -412,7 +431,7 @@ datacompolars/
 │  ├─ helpers.py
 │  ├─ fixtures/
 │  │  └─ sample.sas7bdat   # amostra real para os testes de SAS
-│  ├─ test_engine.py  test_windows.py  test_schema_settings.py  test_report.py
+│  ├─ test_engine.py  test_windows.py  test_schema_settings.py  test_report.py  test_common_keys.py
 │  └─ test_io.py  test_sas.py
 └─ benchmarks/
    ├─ __init__.py
@@ -444,6 +463,8 @@ O baseline é o `datacompy` (instalado no grupo `dev`).
 uv run python benchmarks/datagen.py --rows 1000000 --cols 50 --divergence 0.01 --tag div1pct
 uv run python benchmarks/datagen.py --rows 5000000 --cols 100 --divergence 0.01 --tag div1pct
 uv run python benchmarks/datagen.py --rows 30000000 --cols 50 --partitions 300 --divergence 0.01 --tag div1pct
+# ids parcialmente em comum (aqui, só 10% dos ids do base existem no compare), para medir common_keys_only
+uv run python benchmarks/datagen.py --rows 5000000 --cols 100 --id-overlap 0.1 --tag ov10pct
 ```
 
 **Execução:**
@@ -452,6 +473,8 @@ uv run python benchmarks/datagen.py --rows 30000000 --cols 50 --partitions 300 -
 uv run python benchmarks/run.py data/1000000_50cols_div1pct
 uv run python benchmarks/run.py data/30000000_50cols_div1pct --engines hash,hash_windows --repeats 2 --window-rows 5_000_000
 uv run python benchmarks/run.py data/5000000_100cols_div1pct --engines hash_windows --repeats 2 --window-rows 100_000 --min-free-gb 0
+# com e sem common_keys_only (sufixo _common) em ids pouco sobrepostos
+uv run python benchmarks/run.py data/5000000_100cols_ov10pct --engines hash,hash_common --repeats 2
 ```
 
 ## Licença

@@ -66,6 +66,7 @@ class ExecutionInfo(BaseModel):
     path_reason: str = ""
     windows: int = 1
     rows_per_window: Optional[int] = None
+    common_keys_only: bool = False
     column_details_computed: bool = False
     polars_version: str = ""
     total_seconds: float = 0.0
