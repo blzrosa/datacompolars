@@ -2,7 +2,7 @@
 
 Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, mas pensada para tabelas grandes: usa **hash de linha**, **janelas por faixa da chave primária** (o pico de memória depende do tamanho da janela, não do dataset) e gera um **relatório completo** em texto, Markdown, HTML ou JSON.
 
-- Fontes: caminho de arquivo (parquet, csv, sas), pasta/glob de parquet, `pl.DataFrame` ou `pl.LazyFrame`.
+- Fontes: caminho de arquivo, pasta ou glob (parquet, csv ou sas), `pl.DataFrame` ou `pl.LazyFrame`.
 - Execução lazy e em *streaming*; nenhuma das duas tabelas precisa caber inteira na memória.
 - Tipos de divergência cobertos: linhas só de um lado, valores diferentes por coluna, colunas só de um lado, tipos incompatíveis e chave duplicada.
 
@@ -24,10 +24,16 @@ Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, m
 Requisitos: Python **>= 3.11**, `polars >= 1.30`, `pydantic >= 2.7`.
 
 ```bash
+pip install datacompolars
+pip install "datacompolars[sas]"   # opcional: leitura de .sas7bdat/.xpt
+```
+
+Para desenvolver (núcleo + grupo dev com pytest, psutil e datacompy):
+
+```bash
 git clone https://github.com/blzrosa/datacompolars.git
 cd datacompolars
-uv sync                 # núcleo + grupo dev (pytest, psutil, datacompy)
-uv sync --extra sas     # opcional: leitura de .sas7bdat/.xpt (polars-readstat, pyreadstat, pandas)
+uv sync                 # ou: uv sync --extra sas
 ```
 
 ## Início rápido
@@ -52,7 +58,7 @@ print(result.rows.mismatched)           # 1  (id 2: valor diferente)
 emit(result, ReportSettings(print_output=True))   # imprime o relatório
 ```
 
-Há uma demonstração maior, com igualdade exata, tolerância e relatório HTML, em [`examples/demo.py`](https://github.com/blzrosa/datacompolars/blob/main/examples/demo.py):
+Há uma demonstração maior, com igualdade exata, tolerância e relatório HTML, em [`examples/demo.py`](https://github.com/blzrosa/datacompolars/blob/main/examples/demo.py) (no repositório clonado):
 
 ```bash
 uv run python examples/demo.py
@@ -94,7 +100,7 @@ O caminho escolhido e o motivo aparecem no relatório (seção *Execution*) e em
 
 | Parâmetro | Tipo | Descrição |
 |---|---|---|
-| `left`, `right` | caminho, pasta/glob de parquet, `pl.DataFrame` ou `pl.LazyFrame` | As duas fontes. |
+| `left`, `right` | caminho, pasta ou glob (parquet, csv ou sas), `pl.DataFrame` ou `pl.LazyFrame` | As duas fontes. |
 | `settings` | [`CompareSettings`](#comparesettings) ou `dict` | Configuração da comparação. Um `dict` é convertido com `CompareSettings(**settings)`. |
 | `source` | [`SourceOptions`](#sourceoptions) (opcional) | Opções de leitura dos arquivos (parquet/csv/sas). |
 
@@ -261,7 +267,7 @@ Como abrir arquivos. Só afeta fontes dadas como caminho; `pl.DataFrame` e `pl.L
 | `csv_separator` | `","` | Separador do CSV. Precisa ter exatamente 1 caractere. |
 | `recursive` | `True` | Ao receber um diretório, procura arquivos também nas subpastas. |
 
-A leitura de SAS exige o extra opcional: `uv sync --extra sas`.
+A leitura de SAS exige o extra opcional: `pip install "datacompolars[sas]"` (ou `uv sync --extra sas` no repositório).
 
 ### `ReportSettings`
 
@@ -290,7 +296,7 @@ Dedução do formato a partir de `save_path` (quando `format` é `None`):
 
 ## Exemplo de relatório
 
-Saída em texto de uma comparação de 1.000.000 de linhas (valores ilustrativos do formato; rode `examples/demo.py` para ver o seu):
+Saída em texto de uma comparação de 1.000.000 de linhas (valores ilustrativos do formato; rode o `examples/demo.py` do repositório para ver o seu):
 
 ```text
 ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -402,7 +408,10 @@ datacompolars/
 ├─ tests/
 │  ├─ __init__.py
 │  ├─ helpers.py
+│  ├─ fixtures/
+│  │  └─ sample.sas7bdat   # amostra real para os testes de SAS
 │  ├─ test_engine.py  test_windows.py  test_schema_settings.py  test_report.py
+│  └─ test_io.py  test_sas.py
 └─ benchmarks/
    ├─ __init__.py
    ├─ datagen.py           # gerador de dados (módulo + CLI)
@@ -410,15 +419,18 @@ datacompolars/
    └─ results/             # saídas dos benchmarks
 ```
 
+`tests/`, `benchmarks/` e `examples/` existem apenas no repositório do GitHub; o pacote publicado no PyPI contém só `src/datacompolars`.
+
 Os diretórios `data/` (datasets gerados) e `reports/` (relatórios salvos) são locais.
 
 ## Testes
 
 ```bash
-uv run pytest
+uv run --extra sas pytest      # suíte completa (inclui SAS)
+uv run --exact pytest          # núcleo; os testes de SAS são pulados sem o extra
 ```
 
-Marcadores disponíveis: `sas` (exige `polars-readstat`/`pyreadstat`) e `slow` (datasets maiores). Exemplo: `uv run pytest -m "not slow"`.
+Marcadores disponíveis: `sas` (exige `polars-readstat`/`pyreadstat`) e `slow` (datasets maiores). Exemplo: `uv run --extra sas pytest -m "not slow"`.
 
 ## Benchmarks
 
