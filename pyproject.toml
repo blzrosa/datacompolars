@@ -1,6 +1,6 @@
 [project]
 name = "datacompolars"
-version = "0.2.1"
+version = "0.3.1"
 description = "Comparação de DataFrames/arquivos em Polars escalável - com hash de linha, janelas por PK e relatório completo."
 readme = "README.md"
 requires-python = ">=3.11"
