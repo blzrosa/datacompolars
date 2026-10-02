@@ -5,6 +5,7 @@ Aceita pl.LazyFrame, pl.DataFrame, caminho de arquivo, glob (`dados/*.parquet`) 
 """
 from __future__ import annotations
 
+import glob
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -41,7 +42,7 @@ def _open_path(raw: str, opts: SourceOptions) -> pl.LazyFrame:
         fmt = opts.format or _FORMAT_BY_EXT.get(Path(raw).suffix.lower())
         if fmt is None:
             raise ValueError(f"Cannot infer the file format from the pattern '{raw}'; set SourceOptions.format")
-        return _scan(fmt, [raw], opts)
+        return _scan(fmt, _expand_globs([raw]), opts)
 
     path = Path(raw)
     if path.is_dir():
@@ -69,6 +70,19 @@ def _files_in_directory(folder: Path, opts: SourceOptions):
             return fmt, sorted(found)
     raise FileNotFoundError(f"No parquet/csv/sas files found in '{folder}'")
 
+def _expand_globs(paths: List[str]) -> List[str]:
+    """Expande padrões glob em caminhos concretos, para que todos os formatos falhem cedo
+    com FileNotFoundError quando nada casa (scan_readstat também não expande padrões)."""
+    expanded: List[str] = []
+    for p in paths:
+        if _GLOB_CHARS & set(p):
+            matches = sorted(m for m in glob.glob(p, recursive=True) if Path(m).is_file())
+            if not matches:
+                raise FileNotFoundError(f"No files match pattern: {p}")
+            expanded.extend(matches)
+        else:
+            expanded.append(p)
+    return expanded
 
 def _scan(fmt: str, paths: List[str], opts: SourceOptions) -> pl.LazyFrame:
     if fmt == "parquet":
