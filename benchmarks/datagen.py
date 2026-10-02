@@ -12,9 +12,14 @@ Diferenças em relação ao gerador antigo:
     cada arquivo permitem podar arquivos/row groups nas janelas por PK.
   * Grava o resultado esperado (linhas em comum, divergentes, exclusivas e divergências por
     coluna), que serve de gabarito para testes e benchmarks.
+  * `--id-overlap` (< 1) deixa os ids do `compare` deslocados em relação ao `base`: só essa fração dos
+    ids é comum, como uma faixa contígua (ids iniciais saem do compare; o mesmo número de ids novos
+    entra acima do maior id do base). Serve para medir `common_keys_only`. Para sobreposição
+    espalhada (sem faixa), use `--only-left`/`--only-right`.
 
 Uso:
     uv run python benchmarks/datagen.py --rows 10_000_000 --cols 50 --divergence 0.01 --tag div1pct
+    uv run python benchmarks/datagen.py --rows 10_000_000 --cols 50 --id-overlap 0.1 --tag ov10pct
 """
 from __future__ import annotations
 
@@ -51,6 +56,7 @@ class DatasetSpec:
     null_rate: float = 0.02       # nulos (iguais nos dois lados)
     only_left: float = 0.0        # fração de linhas removidas do compare
     only_right: float = 0.0       # fração de linhas extras (ids novos) só no compare
+    id_overlap: float = 1.0       # fração dos ids do base presentes no compare, em faixa contígua (1.0 = todos)
     left_only_cols: int = 0       # colunas só no base
     right_only_cols: int = 0      # colunas só no compare
     seed: int = 42
@@ -61,7 +67,7 @@ class DatasetSpec:
         if self.rows < 1 or self.partitions < 1:
             raise ValueError("rows e partitions devem ser >= 1")
         column_names(self.cols)
-        for name in ("divergence", "cell_rate", "null_rate", "only_left", "only_right"):
+        for name in ("divergence", "cell_rate", "null_rate", "only_left", "only_right", "id_overlap"):
             if not 0.0 <= getattr(self, name) <= 1.0:
                 raise ValueError(f"{name} deve estar em [0, 1]")
 
@@ -123,6 +129,8 @@ def _partition(
     divergent = rng.random(n) < spec.divergence
     forced = rng.integers(0, spec.cols, n)  # coluna que sempre muda numa linha divergente
     keep = rng.random(n) >= spec.only_left
+    id_offset = int(round(spec.rows * (1.0 - spec.id_overlap)))  # ids [0, id_offset) saem do compare
+    keep &= ids >= id_offset
 
     exp = Expected(left_rows=n, common=int(keep.sum()), left_only=int((~keep).sum()))
     row_mismatch = np.zeros(n, dtype=bool)
@@ -154,7 +162,7 @@ def _partition(
     )
 
     extra_df: Optional[pl.DataFrame] = None
-    r = int(round(n * spec.only_right))
+    r = int(round(n * spec.only_right)) + int(round(n * (1.0 - spec.id_overlap)))
     if r:
         extra_df = _frame(
             np.arange(extra_start, extra_start + r, dtype=np.int64),
@@ -224,6 +232,9 @@ def main() -> None:
     ap.add_argument("--null-rate", type=float, default=0.02)
     ap.add_argument("--only-left", type=float, default=0.0)
     ap.add_argument("--only-right", type=float, default=0.0)
+    ap.add_argument(
+        "--id-overlap", type=float, default=1.0, help="fração dos ids em comum, em faixa contígua (1.0 = todos)"
+    )
     ap.add_argument("--left-only-cols", type=int, default=0)
     ap.add_argument("--right-only-cols", type=int, default=0)
     ap.add_argument("--seed", type=int, default=42)
@@ -240,6 +251,7 @@ def main() -> None:
         null_rate=a.null_rate,
         only_left=a.only_left,
         only_right=a.only_right,
+        id_overlap=a.id_overlap,
         left_only_cols=a.left_only_cols,
         right_only_cols=a.right_only_cols,
         seed=a.seed,

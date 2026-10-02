@@ -69,6 +69,17 @@ class CompareSettings(BaseModel):
             "'auto' liga acima de ~20M linhas; um inteiro força janelas desse tamanho; None desliga."
         ),
     )
+    common_keys_only: bool = Field(
+        default=False,
+        description=(
+            "Para tabelas com ids muito diferentes: antes de comparar, restringe cada janela às chaves presentes "
+            "nos dois lados (varredura só das chaves + semi join), de modo que o hash/a comparação por coluna "
+            "processe só as linhas em comum. Se a 1ª coluna da PK for inteira, a comparação também fica limitada à "
+            "interseção das faixas de ids dos dois lados. As linhas exclusivas continuam no relatório, contadas como "
+            "(total - em comum), o que pressupõe chaves únicas (veja check_duplicate_keys). Com muita sobreposição de "
+            "ids, custa uma varredura extra só das chaves."
+        ),
+    )
 
     @field_validator("join_columns")
     @classmethod

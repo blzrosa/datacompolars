@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import polars as pl
 
@@ -86,19 +86,61 @@ def resolve_window_rows(
     return int(setting)
 
 
-def plan_windows(left: PkStats, right: PkStats, rows_per_window: Optional[int]) -> List[Window]:
+def key_overlap(left: PkStats, right: PkStats) -> Optional[Tuple[int, int]]:
+    """Faixa inclusiva [lo, hi] em que os dois lados têm chaves não nulas.
+
+    None se as faixas são disjuntas ou se algum lado não tem chave não nula. Chaves fora dessa faixa
+    não podem ter par no outro lado, então só precisam ser contadas (não comparadas).
+    """
+    if left.lo is None or left.hi is None or right.lo is None or right.hi is None:
+        return None
+    lo, hi = max(left.lo, right.lo), min(left.hi, right.hi)
+    return (lo, hi) if lo <= hi else None
+
+
+def rows_in_range(stats: PkStats, lo: int, hi: int) -> int:
+    """Estimativa (premissa de ids densos) de linhas com chave não nula em [lo, hi], inclusive."""
+    if stats.lo is None or stats.hi is None:
+        return 0
+    inside = min(hi, stats.hi) - max(lo, stats.lo) + 1
+    if inside <= 0:
+        return 0
+    span = stats.hi - stats.lo + 1
+    return -(-((stats.n - stats.nulls) * inside) // span)  # teto, em aritmética inteira
+
+
+def plan_windows(
+    left: PkStats,
+    right: PkStats,
+    rows_per_window: Optional[int],
+    bounds: Optional[Tuple[int, int]] = None,
+) -> List[Window]:
     """Divide a faixa [min, max] da chave em janelas de largura igual (~rows_per_window linhas).
 
     Premissa: ids razoavelmente densos. Em ids muito esparsos/enviesados as janelas ficam
     desiguais (o resultado continua correto; só o pico de memória deixa de ser uniforme).
-    """
-    n = max(left.n, right.n)
-    los = [s.lo for s in (left, right) if s.lo is not None]
-    his = [s.hi for s in (left, right) if s.hi is not None]
-    if rows_per_window is None or n <= rows_per_window or not los or not his:
-        return [Window(index=0)]
 
-    lo, hi = min(los), max(his)
+    Com `bounds` (faixa inclusiva, normalmente `key_overlap`), só essa faixa é dividida e as chaves nulas
+    ganham janela própria; o que está fora de `bounds` fica a cargo de quem chama. Mesmo quando cabe
+    numa janela só, ela leva o predicado da faixa (para podar row groups na leitura).
+    """
+    has_nulls = bool(left.nulls or right.nulls)
+    if bounds is None:
+        n = max(left.n, right.n)
+        los = [s.lo for s in (left, right) if s.lo is not None]
+        his = [s.hi for s in (left, right) if s.hi is not None]
+        if rows_per_window is None or n <= rows_per_window or not los or not his:
+            return [Window(index=0)]
+        lo, hi = min(los), max(his)
+    else:
+        lo, hi = bounds
+        n = max(rows_in_range(left, lo, hi), rows_in_range(right, lo, hi))
+        if rows_per_window is None or n <= rows_per_window:
+            single = [Window(index=0, lo=lo, hi=hi + 1)]
+            if has_nulls:
+                single.append(Window(index=1, null_keys=True))
+            return single
+
     span = hi - lo + 1
     k = max(1, math.ceil(n / rows_per_window))
     width = max(1, math.ceil(span / k))
@@ -109,6 +151,6 @@ def plan_windows(left: PkStats, right: PkStats, rows_per_window: Optional[int]) 
         end = min(start + width, hi + 1)
         windows.append(Window(index=len(windows), lo=start, hi=end))
         start = end
-    if left.nulls or right.nulls:
+    if has_nulls:
         windows.append(Window(index=len(windows), null_keys=True))
     return windows
