@@ -52,7 +52,7 @@ print(result.rows.mismatched)           # 1  (id 2: valor diferente)
 emit(result, ReportSettings(print_output=True))   # imprime o relatório
 ```
 
-Há uma demonstração maior, com igualdade exata, tolerância e relatório HTML, em [`examples/demo.py`](examples/demo.py):
+Há uma demonstração maior, com igualdade exata, tolerância e relatório HTML, em [`examples/demo.py`](https://github.com/blzrosa/datacompolars/blob/main/examples/demo.py):
 
 ```bash
 uv run python examples/demo.py
@@ -129,7 +129,7 @@ HTML e JSON sempre trazem **tudo**, sem os limites acima. O HTML é um arquivo �
 
 ## Configuração
 
-Tudo que o usuário controla passa por três modelos Pydantic, definidos em [`settings.py`](src/datacompolars/settings.py):
+Tudo que o usuário controla passa por três modelos Pydantic, definidos em [`settings.py`](https://github.com/blzrosa/datacompolars/blob/main/src/datacompolars/settings.py):
 
 | Modelo | Controla | Onde é usado |
 |---|---|---|
@@ -442,4 +442,4 @@ uv run python benchmarks/run.py data/5000000_100cols_div1pct --engines hash_wind
 
 ## Licença
 
-Distribuído sob a [Apache License 2.0](LICENSE).
+Distribuído sob a [Apache License 2.0](https://github.com/blzrosa/datacompolars/blob/main/LICENSE).
