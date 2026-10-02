@@ -1,3 +1,5 @@
+[![CI](https://github.com/blzrosa/datacompolars/actions/workflows/ci.yml/badge.svg)](https://github.com/blzrosa/datacompolars/actions/workflows/ci.yml)
+
 # DataComPolars
 
 Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, mas pensada para tabelas grandes: usa **hash de linha**, **janelas por faixa da chave primária** (o pico de memória depende do tamanho da janela, não do dataset) e gera um **relatório completo** em texto, Markdown, HTML ou JSON.
