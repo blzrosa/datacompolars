@@ -23,7 +23,7 @@ jobs:
         python: ["3.11", "3.12", "3.13", "3.14"]
         variant: [core, sas]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v8.2.0
 
@@ -41,7 +41,7 @@ jobs:
     name: build e smoke test do wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v8.2.0
 
