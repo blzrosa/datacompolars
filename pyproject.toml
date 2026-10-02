@@ -48,7 +48,7 @@ Issues = "https://github.com/blzrosa/datacompolars/issues"
 [project.optional-dependencies]
 # Leitura de SAS (.sas7bdat/.xpt). A GERAÇÃO de .xpt nos benchmarks também usa pyreadstat + pandas.
 sas = [
-    "polars-readstat",
+    "polars-readstat>=0.23.3",
     "pyreadstat",
     "pandas",
 ]
