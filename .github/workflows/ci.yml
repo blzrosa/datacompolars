@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }} / ${{ matrix.variant }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        variant: [core, sas]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      # Núcleo: --exact remove qualquer pacote fora das dependências declaradas,
+      # então polars-readstat/pyreadstat/pandas NÃO ficam instalados e test_sas.py é pulado.
+      - name: Testes (núcleo, sem o extra sas)
+        if: matrix.variant == 'core'
+        run: uv run --python ${{ matrix.python }} --exact pytest -v -rs
+
+      - name: Testes (com o extra sas)
+        if: matrix.variant == 'sas'
+        run: uv run --python ${{ matrix.python }} --extra sas pytest -v -rs
+
+  build:
+    name: build e smoke test do wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Build
+        run: uv build
+
+      - name: twine check
+        run: uvx twine check dist/*
+
+      - name: Smoke test do wheel num venv limpo, fora do repositório
+        run: |
+          uv venv "$RUNNER_TEMP/venv-wheel"
+          uv pip install --python "$RUNNER_TEMP/venv-wheel" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv-wheel/bin/python" - <<'PY'
+          import polars as pl
+          from datacompolars import CompareSettings, compare
+
+          a = pl.DataFrame({"id": [1, 2], "v": [1.0, 2.0]})
+          b = pl.DataFrame({"id": [1, 2], "v": [1.0, 2.5]})
+          r = compare(a, b, CompareSettings(join_columns=["id"]))
+          assert r.rows.mismatched == 1, r.rows
+          print("ok")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
