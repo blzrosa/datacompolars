@@ -1,6 +1,7 @@
 import polars as pl
 import pytest
 
+from datacompolars.settings import AUTO_WINDOW_CELLS, AUTO_WINDOW_MIN_ROWS
 from datacompolars.windows import PkStats, Window, pk_stats, plan_windows, resolve_window_rows
 
 
@@ -57,18 +58,51 @@ def test_describe():
         (None, 10**9, None),
         (500, 10, 500),
         ("auto", 1_000, None),
-        ("auto", 20_000_000, None),  # no limiar não liga (só acima)
-        ("auto", 20_000_001, 10_000_000),
+        ("auto", 20_000_000, None),  # no limiar (células) não liga; só acima
+        ("auto", 20_000_001, 20_000_000),  # 1 coluna: janela de window_cells // 1 linhas (acima do piso min_rows)
     ],
 )
 def test_resolve_window_rows(setting, n, expected):
-    out = resolve_window_rows(setting, stats(n, 0, n), stats(5, 0, 5), threshold=20_000_000, auto_rows=10_000_000)
+    out = resolve_window_rows(
+        setting, stats(n, 0, n), stats(5, 0, 5), window_cells=20_000_000, min_rows=10_000_000
+    )
     assert out == expected
 
 
+def test_auto_defaults_are_30m_cells_and_100k_rows():
+    assert (AUTO_WINDOW_CELLS, AUTO_WINDOW_MIN_ROWS) == (30_000_000, 100_000)
+    small = stats(5, 0, 5)
+
+    def auto(rows, cols):
+        return resolve_window_rows(
+            "auto", stats(rows, 0, rows), small, window_cells=AUTO_WINDOW_CELLS, min_rows=AUTO_WINDOW_MIN_ROWS, n_cols=cols
+        )
+
+    assert auto(1_000_000, 10) is None  # 10M células: janela única
+    assert auto(3_000_000, 10) is None  # 30M: no limiar não liga
+    assert auto(10_000_000, 10) == 3_000_000  # janelas de ~30M células
+    assert auto(1_000_000, 50) == 600_000
+    assert auto(1_000_000, 100) == 300_000
+    assert auto(1_000_000, 300) == 100_000
+    assert auto(10_000_000, 300) == 100_000
+    assert auto(100_000, 300) is None  # 30M células
+    assert auto(100_000, 301) == 100_000  # um pouco acima: piso de 100 mil linhas
+    assert auto(1_000_000, 3_000) == 100_000  # muito largo: o piso manda
+    other = resolve_window_rows(
+        "auto", small, stats(1_000_000, 0, 1_000_000), window_cells=AUTO_WINDOW_CELLS, min_rows=AUTO_WINDOW_MIN_ROWS, n_cols=50
+    )
+    assert other == 600_000  # vale o maior lado
+
+
 def test_auto_uses_the_larger_side():
-    out = resolve_window_rows("auto", stats(5, 0, 5), stats(30, 0, 30), threshold=20, auto_rows=10)
-    assert out == 10
+    out = resolve_window_rows("auto", stats(5, 0, 5), stats(30, 0, 30), window_cells=20, min_rows=10)
+    assert out == 20
+
+
+def test_auto_counts_columns():
+    kw = {"window_cells": 100, "min_rows": 10}
+    assert resolve_window_rows("auto", stats(30, 0, 30), stats(5, 0, 5), n_cols=3, **kw) is None  # 90 <= 100
+    assert resolve_window_rows("auto", stats(30, 0, 30), stats(5, 0, 5), n_cols=4, **kw) == 25  # 120 > 100 -> 100 // 4
 
 
 # ------------------------------------------------------------------ com Polars

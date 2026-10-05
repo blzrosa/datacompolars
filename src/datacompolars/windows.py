@@ -75,14 +75,22 @@ def resolve_window_rows(
     left: PkStats,
     right: PkStats,
     *,
-    threshold: int,
-    auto_rows: int,
+    window_cells: int,
+    min_rows: int,
+    n_cols: int = 1,
 ) -> Optional[int]:
-    """Traduz o `window_rows` das configurações para um tamanho de janela (None = sem janelas)."""
+    """Traduz o `window_rows` das configurações para um tamanho de janela (None = sem janelas).
+
+    "auto": a tabela (maior lado) tem `linhas x n_cols` células; até `window_cells` é janela única. Acima disso, as
+    janelas têm ~`window_cells` células (`window_cells // n_cols` linhas), com no mínimo `min_rows` linhas.
+    """
     if setting is None:
         return None
     if setting == "auto":
-        return auto_rows if max(left.n, right.n) > threshold else None
+        cols = max(n_cols, 1)
+        if max(left.n, right.n) * cols <= window_cells:
+            return None
+        return max(min_rows, window_cells // cols)
     return int(setting)
 
 

@@ -16,11 +16,15 @@ NAN = float("nan")
 # tira o motor do hash). Cada um, com janela única e forçando várias janelas (window_rows=2).
 EXACT = [
     pytest.param({"window_rows": None}, id="hash"),
-    pytest.param({"window_rows": 2}, id="hash-windows"),
+    pytest.param({"window_rows": 2, "cache_windows": False}, id="hash-windows"),
+    pytest.param({"window_rows": 2, "cache_windows": True}, id="hash-windows-cache"),
+    pytest.param({"window_rows": 2, "cache_windows": True, "prefetch_windows": True}, id="hash-windows-cache-prefetch"),
+    pytest.param({"window_rows": 2}, id="hash-windows-auto"),  # cache_windows="auto" (padrão): liga no hash
 ]
 COLUMNWISE = [
     pytest.param({"abs_tol": 1e-12, "window_rows": None}, id="columnwise"),
-    pytest.param({"abs_tol": 1e-12, "window_rows": 2}, id="columnwise-windows"),
+    pytest.param({"abs_tol": 1e-12, "window_rows": 2, "cache_windows": False}, id="columnwise-windows"),
+    pytest.param({"abs_tol": 1e-12, "window_rows": 2, "cache_windows": True}, id="columnwise-windows-cache"),
 ]
 ALL_MODES = EXACT + COLUMNWISE
 
