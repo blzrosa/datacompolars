@@ -9,12 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .comparators import BaseComparator
 
-# Janelas de execução automáticas (window_rows="auto").
-# Medido com 30M x 50 colunas (row groups de ~100k linhas): a query única de hash usa ~3,7 GB.
-# Acima do limiar, o motor fatia a comparação em janelas de ~AUTO_WINDOW_ROWS linhas por faixa
-# de PK, e o pico de memória passa a depender do tamanho da janela, não do dataset.
-AUTO_WINDOW_THRESHOLD_ROWS = 20_000_000
-AUTO_WINDOW_ROWS = 10_000_000
+# Janelas de execução automáticas (window_rows="auto"), dimensionadas em CÉLULAS (linhas x colunas), não só em linhas:
+# cada janela tem custo fixo (consultas, cache) que só compensa se a janela for grande, e o pico de memória é
+# proporcional às células da janela. Regras:
+#   - tabela (maior lado) com até AUTO_WINDOW_CELLS células: janela única (sem janelas, sem cache);
+#   - acima disso: janelas de ~AUTO_WINDOW_CELLS células, nunca com menos de AUTO_WINDOW_MIN_ROWS linhas
+#     (300 colunas -> 100 mil linhas; 100 colunas -> 300 mil; 10 colunas -> 3 milhões).
+# Medido (benchmarks/, polars 1.44.2, janelas fixas de 100 mil linhas): 1M x 10 colunas, janela única 0,16 s x
+# janelas+cache 0,31 s; 10M x 10, 1,5 s x 3,8 s (muitas janelas pequenas); 1M x 50 empate; 1M x 300 janelas 2,1 s com
+# ~1,2 GB (10M x 300 em ~22 s com ~1,3 GB). Janelas menores que o row group dos arquivos decodificam o mesmo row group
+# mais de uma vez (o ideal é um múltiplo do tamanho do row group).
+AUTO_WINDOW_CELLS = 30_000_000
+AUTO_WINDOW_MIN_ROWS = 100_000
 
 PathLike = Union[str, Path]
 
@@ -66,7 +72,26 @@ class CompareSettings(BaseModel):
         default="auto",
         description=(
             "Janelas de execução por faixa da primeira coluna da PK (precisa ser inteira). "
-            "'auto' liga acima de ~20M linhas; um inteiro força janelas desse tamanho; None desliga."
+            "'auto' liga quando linhas x colunas passa de 30 milhões de células, com janelas de ~30 milhões de células (mín. 100 mil linhas); um inteiro força janelas desse tamanho; None desliga."
+        ),
+    )
+    cache_windows: Union[bool, Literal["auto"]] = Field(
+        default="auto",
+        description=(
+            "Carrega as duas metades de cada janela em memória uma vez e roda hash, detalhes e amostras sobre "
+            "elas, em vez de reler/decodificar o parquet a cada passada. 'auto' (padrão) liga no caminho exato "
+            "(hash) quando há janelas; True liga também no caminho columnwise (mais memória, ganho pequeno); "
+            "False desliga. Custa ~2 x janela x colunas x 8 bytes e é ignorado quando a janela passa de ~100M "
+            "células (linhas x colunas x 2). Sem janelas (window_rows) não tem efeito."
+        ),
+    )
+    prefetch_windows: bool = Field(
+        default=False,
+        description=(
+            "Decodifica a janela k+1 numa thread de fundo enquanto a k é processada (hash, detalhes). Só tem "
+            "efeito com o cache de janelas ligado e mais de uma janela. Dobra o pico de memória (~2 janelas em "
+            "memória) em troca de sobrepor leitura e cálculo; meça antes de ligar. Fases de fundo aparecem em "
+            "`timings` como `cache_bg`/`keys_bg` (não somam no total); `prefetch_wait` é o que não foi sobreposto."
         ),
     )
     common_keys_only: bool = Field(

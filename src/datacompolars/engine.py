@@ -14,12 +14,16 @@ Fluxo (decidido pelos benchmarks de memória/tempo):
        b. caminho "hash":     UMA query de join (chave + hash por coluna + flag) -> contagens e nº de divergentes;
           caminho "columnwise": join de chaves + comparadores por coluna em lotes;
        c. detalhes (opcional): no hash, só se a janela tem divergência, relê SÓ as linhas divergentes
-          (semi join nas chaves divergentes) para contar por coluna e coletar amostras.
+          (semi join nas chaves divergentes) para contar por coluna e coletar amostras. Com poucas linhas
+          divergentes, todas as colunas entram num lote só (ver `_batch_size`).
+  4. prefetch_windows (opcional, exige cache): uma thread decodifica a janela k+1 enquanto a k é processada
+     (o `collect` solta o GIL); o pico de memória passa a ser de ~2 janelas.
 """
 from __future__ import annotations
 
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
@@ -38,13 +42,21 @@ from .results import (
     TypeMismatch,
 )
 from .schema import SchemaAlignment, align_schemas, normalize_schema
-from .settings import AUTO_WINDOW_ROWS, AUTO_WINDOW_THRESHOLD_ROWS, CompareSettings, SourceOptions
+from .settings import AUTO_WINDOW_CELLS, AUTO_WINDOW_MIN_ROWS, CompareSettings, SourceOptions
 from .windows import PkStats, Window, key_overlap, pk_stats, plan_windows, resolve_window_rows
 
 _IN_L, _IN_R = "__in_l", "__in_r"
 _H_L, _H_R = "__h_l", "__h_r"
 _R = "__r_"  # prefixo das colunas do lado direito no frame unido
 _M = "__m_"  # prefixo das colunas booleanas "igual?"
+_STATE = "__state"  # estado da linha no join do hash: 0 igual, 1 divergente, 2 só esquerda, 3 só direita
+# Acima disto (linhas divergentes na janela) as amostras são lidas coluna a coluna, sem materializar o lote.
+SAMPLE_BATCH_MAX_ROWS = 100_000
+# cache_windows: só carrega a janela em memória se (linhas da janela x colunas x 2 lados) couber nisto.
+CACHE_WINDOW_MAX_CELLS = 100_000_000
+# Detalhes: com poucas linhas divergentes cabem MUITAS colunas num lote só. O lote cresce até que
+# (linhas divergentes x colunas do lote) chegue a este orçamento de células; `columns_per_batch` é o piso.
+SUBSET_CELLS_BUDGET = 5_000_000
 
 _NUMERIC = NumericComparator()
 _STRING = StringComparator()
@@ -79,6 +91,9 @@ class _Comparison:
         self._outside_l: Optional[pl.LazyFrame] = None
         self._outside_r: Optional[pl.LazyFrame] = None
         self._outside_n = (0, 0)
+        # Expressões não dependem da janela: montá-las uma vez (são imutáveis) poupa trabalho em Python por janela.
+        self._match_cache: Dict[str, pl.Expr] = {}
+        self._hash_exprs: Dict[str, pl.Expr] = {}
 
         lower = settings.lowercase_columns
         self.pk = [c.lower() if lower else c for c in settings.join_columns]
@@ -157,6 +172,7 @@ class _Comparison:
 
         with self._timed("plan"):
             windows, rows_per_window = self._plan_windows()
+        cache = self._should_cache(rows_per_window)
         if not self.cols:
             self.warnings.append("No common columns besides the join key: only row membership was compared.")
 
@@ -184,47 +200,27 @@ class _Comparison:
         samples: Dict[str, List[List[Any]]] = {}
         details = s.column_details
 
-        for w in windows:
-            lw, rw = self._window(self.left, w), self._window(self.right, w)
-            subset: Optional[pl.DataFrame] = None
-            counts: Dict[str, int] = {}
-            only_l = only_r = 0
+        prefetch = bool(cache and s.prefetch_windows and len(windows) > 1)
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="datacompolars-prefetch") if prefetch else None
+        pending = pool.submit(self._prepare_window, windows[0], cache, True) if pool is not None else None
 
-            if s.common_keys_only:
-                with self._timed("keys"):
-                    restricted_l, restricted_r, only_l, only_r = self._restrict_to_common(lw, rw)
-                if restricted_l is None or restricted_r is None:  # nenhuma chave em comum nesta janela
+        try:
+            for i, w in enumerate(windows):
+                lw = rw = None  # solta a janela anterior ANTES de pedir a próxima: o pico fica em ~2 janelas
+                if pool is not None and pending is not None:
+                    with self._timed("prefetch_wait"):  # só a parte da decodificação que NÃO foi sobreposta
+                        lw, rw, only_l, only_r = pending.result()
+                    pending = pool.submit(self._prepare_window, windows[i + 1], cache, True) if i + 1 < len(windows) else None
+                else:
+                    lw, rw, only_l, only_r = self._prepare_window(w, cache, False)
+                if lw is None or rw is None:  # common_keys_only: nenhuma chave em comum nesta janela
                     tot["only_left"] += only_l
                     tot["only_right"] += only_r
                     continue
-                lw, rw = restricted_l, restricted_r
-
-            with self._timed("compare"):
-                if self.path == "hash":
-                    stats = self._membership(lw, rw, with_hash=True)
-                else:
-                    stats = self._membership(lw, rw, with_hash=False)
-            if s.common_keys_only:  # lw/rw só têm chaves em comum: as exclusivas vieram da varredura de chaves
-                stats["only_left"], stats["only_right"] = only_l, only_r
-
-            if self.path == "hash":
-                if details and stats["mismatch"] > 0:
-                    with self._timed("details"):
-                        subset = self._mismatching_keys(lw, rw)
-                        counts, _ = self._diagnose(lw, rw, subset, need_union=False)
-            elif stats["both"] > 0 and self.cols:
-                with self._timed("compare"):
-                    counts, subset = self._diagnose(lw, rw, None, need_union=True)
-                stats["mismatch"] = subset.height if subset is not None else 0
-
-            for k in tot:
-                tot[k] += stats[k]
-            if details and counts:
-                for c, n in counts.items():
-                    col_counts[c] += n
-                if s.sample_count > 0 and subset is not None and subset.height:
-                    with self._timed("details"):
-                        self._collect_samples(lw, rw, subset, counts, samples)
+                self._process_window(lw, rw, only_l, only_r, tot, col_counts, samples)
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
 
         return self._result(
             aborted=False,
@@ -234,6 +230,95 @@ class _Comparison:
             windows=len(windows),
             rows_per_window=rows_per_window,
         )
+
+    def _prepare_window(
+        self, w: Window, cache: bool, bg: bool
+    ) -> Tuple[Optional[pl.LazyFrame], Optional[pl.LazyFrame], int, int]:
+        """Monta os dois lados da janela: filtro por faixa, restrição às chaves comuns e (se `cache`) carga em memória.
+
+        Roda na thread principal ou, com prefetch (`bg=True`), na thread de fundo; só lê estado imutável do
+        motor. Devolve (lw, rw, só_esquerda, só_direita); lw/rw são None quando não há chave em comum.
+        As fases de fundo são cronometradas como `keys_bg`/`cache_bg` (sobrepostas ao resto, não somam no total).
+        """
+        sfx = "_bg" if bg else ""
+        lw, rw = self._window(self.left, w), self._window(self.right, w)
+        only_l = only_r = 0
+        if self.s.common_keys_only:
+            with self._timed("keys" + sfx):
+                lw, rw, only_l, only_r = self._restrict_to_common(lw, rw)
+            if lw is None or rw is None:
+                return None, None, only_l, only_r
+        if cache:  # decodifica a janela UMA vez; hash, detalhes e amostras leem da memória
+            with self._timed("cache" + sfx):
+                lw, rw = self._materialize(lw), self._materialize(rw)
+        return lw, rw, only_l, only_r
+
+    def _process_window(
+        self,
+        lw: pl.LazyFrame,
+        rw: pl.LazyFrame,
+        only_l: int,
+        only_r: int,
+        tot: Dict[str, int],
+        col_counts: Dict[str, int],
+        samples: Dict[str, List[List[Any]]],
+    ) -> None:
+        s = self.s
+        details = s.column_details
+        subset: Optional[pl.DataFrame] = None
+        counts: Dict[str, int] = {}
+        mismatching: Optional[pl.DataFrame] = None
+        with self._timed("compare"):
+            if self.path == "hash" and details:
+                stats, mismatching = self._hash_pass(lw, rw)  # contagens + chaves divergentes: 1 avaliação
+            else:
+                stats = self._membership(lw, rw, with_hash=self.path == "hash")
+        if s.common_keys_only:  # lw/rw só têm chaves em comum: as exclusivas vieram da varredura de chaves
+            stats["only_left"], stats["only_right"] = only_l, only_r
+
+        if self.path == "hash":
+            if details and stats["mismatch"] > 0:
+                with self._timed("details"):
+                    assert mismatching is not None
+                    subset = mismatching
+                    counts, _ = self._diagnose(lw, rw, subset, need_union=False)
+        elif stats["both"] > 0 and self.cols:
+            with self._timed("compare"):
+                counts, subset = self._diagnose(lw, rw, None, need_union=True)
+            stats["mismatch"] = subset.height if subset is not None else 0
+
+        for k in tot:
+            tot[k] += stats[k]
+        if details and counts:
+            for c, n in counts.items():
+                col_counts[c] += n
+            if s.sample_count > 0 and subset is not None and subset.height:
+                with self._timed("details"):
+                    self._collect_samples(lw, rw, subset, counts, samples)
+
+    # ------------------------------------------------------------------ cache de janela
+    def _should_cache(self, rows_per_window: Optional[int]) -> bool:
+        mode = self.s.cache_windows
+        if mode is False or (mode == "auto" and self.path != "hash"):
+            return False
+        explicit = mode is True  # só avisa quando o usuário pediu explicitamente
+        if rows_per_window is None:  # janela única (tabela inteira): carregar tudo anularia o ganho de memória
+            if explicit:
+                self.warnings.append("cache_windows ignored: it needs window_rows (single window used)")
+            return False
+        cells = rows_per_window * max(len(self.cols), 1) * 2
+        if cells > CACHE_WINDOW_MAX_CELLS:
+            if explicit:
+                self.warnings.append(
+                    f"cache_windows ignored: a window of {rows_per_window:,} rows x {len(self.cols)} columns is too "
+                    "large to hold in memory; use a smaller window_rows"
+                )
+            return False
+        return True
+
+    @staticmethod
+    def _materialize(lf: pl.LazyFrame) -> pl.LazyFrame:
+        return lf.collect(engine="streaming").lazy()
 
     # ------------------------------------------------------------------ janelas
     def _plan_windows(self) -> Tuple[List[Window], Optional[int]]:
@@ -252,7 +337,12 @@ class _Comparison:
         ls: PkStats = pk_stats(self.left, pk0)
         rs: PkStats = pk_stats(self.right, pk0)
         rows = resolve_window_rows(
-            setting, ls, rs, threshold=AUTO_WINDOW_THRESHOLD_ROWS, auto_rows=AUTO_WINDOW_ROWS
+            setting,
+            ls,
+            rs,
+            window_cells=AUTO_WINDOW_CELLS,
+            min_rows=AUTO_WINDOW_MIN_ROWS,
+            n_cols=len(self.cols) + len(self.pk),  # células da tabela: colunas comparadas + chave
         )
         if not ranged:
             return plan_windows(ls, rs, rows), rows
@@ -303,7 +393,11 @@ class _Comparison:
         assert self.aln is not None
         exprs: List[pl.Expr] = [pl.col(c) for c in self.pk]
         if hash_name:
-            exprs.append(row_hash_expr(self.cols, self.aln.left_schema).alias(hash_name))
+            h = self._hash_exprs.get(hash_name)
+            if h is None:
+                h = row_hash_expr(self.cols, self.aln.left_schema).alias(hash_name)
+                self._hash_exprs[hash_name] = h
+            exprs.append(h)
         exprs.append(pl.lit(True).alias(flag))
         return lf.select(exprs)
 
@@ -364,20 +458,50 @@ class _Comparison:
         out.setdefault("mismatch", 0)
         return out
 
-    def _mismatching_keys(self, lw: pl.LazyFrame, rw: pl.LazyFrame) -> pl.DataFrame:
-        joined = self._joined(lw, rw, with_hash=True)
-        return (
-            joined.filter(self._both() & pl.col(_H_L).ne_missing(pl.col(_H_R)))
-            .select(self.pk)
-            .collect(engine="streaming")
+    def _hash_pass(self, lw: pl.LazyFrame, rw: pl.LazyFrame) -> Tuple[Dict[str, int], pl.DataFrame]:
+        """Caminho hash com detalhes: UMA avaliação do join+hash por janela.
+
+        Antes eram duas (contagens e, depois, as chaves divergentes), e o hash de todas as colunas é a
+        parte cara. Agora o join devolve só a chave e um estado de 1 byte por linha; contagens e chaves
+        divergentes saem desse frame em memória (~9 bytes por linha da janela).
+        """
+        both = self._both()
+        diff = both & pl.col(_H_L).ne_missing(pl.col(_H_R))
+        state = (
+            pl.when(diff)
+            .then(pl.lit(1, dtype=pl.UInt8))
+            .when(both)
+            .then(pl.lit(0, dtype=pl.UInt8))
+            .when(pl.col(_IN_R).is_null())
+            .then(pl.lit(2, dtype=pl.UInt8))
+            .otherwise(pl.lit(3, dtype=pl.UInt8))
+            .alias(_STATE)
         )
+        frame = self._joined(lw, rw, with_hash=True).select([*self.pk, state]).collect(engine="streaming")
+        n = {int(k): int(v) for k, v in frame.group_by(_STATE).agg(pl.len().alias("n")).iter_rows()}
+        stats = {
+            "only_left": n.get(2, 0),
+            "only_right": n.get(3, 0),
+            "both": n.get(0, 0) + n.get(1, 0),
+            "mismatch": n.get(1, 0),
+        }
+        keys = frame.filter(pl.col(_STATE) == 1).select(self.pk)
+        return stats, keys
 
     # ------------------------------------------------------------------ comparação por coluna
     def _match_expr(self, col: str) -> pl.Expr:
+        expr = self._match_cache.get(col)
+        if expr is None:
+            expr = self._build_match_expr(col)
+            self._match_cache[col] = expr
+        return expr
+
+    def _build_match_expr(self, col: str) -> pl.Expr:
         assert self.aln is not None
         a, b = pl.col(col), pl.col(_R + col)
         dtype = self.aln.left_schema[col]
         comp = self.custom.get(col)
+        builtin = comp is None  # comparador do próprio motor (os custom podem devolver nulo: mantêm a regra de nulos)
         if comp is None:
             if dtype.is_numeric():
                 comp = _NUMERIC
@@ -387,16 +511,25 @@ class _Comparison:
                 comp = _ARRAY
             else:
                 return a.eq_missing(b)
+        abs_tol, rel_tol = self._tol(self.abs_tol, col), self._tol(self.rel_tol, col)
         m = comp.compare(
             col,
             _R + col,
-            abs_tol=self._tol(self.abs_tol, col),
-            rel_tol=self._tol(self.rel_tol, col),
+            abs_tol=abs_tol,
+            rel_tol=rel_tol,
             ignore_spaces=self.s.ignore_spaces,
             ignore_case=self.s.ignore_case,
             is_float=dtype.is_float(),
         )
-        # regra de nulos aplicada pelo motor: nulo/nulo = igual; nulo de um lado só = diferente
+        # Regra de nulos: nulo/nulo = igual; nulo de um lado só = diferente. Nos comparadores do motor ela já sai de
+        # `eq_missing`, então o invólucro `(nulo & nulo) | (não nulo & não nulo & m.fill_null(False))` (~8 nós a mais por
+        # coluna, x centenas de colunas por consulta) é dispensável:
+        #   - string: eq_missing em strings (as operações str propagam nulo) já é completo;
+        #   - numérico: só o ramo NaN/tolerância pode dar nulo (is_nan/diferença de nulo), e fill_null(False) resolve.
+        if builtin and comp is _STRING:
+            return m
+        if builtin and comp is _NUMERIC:
+            return m.fill_null(False) if (dtype.is_float() or abs_tol or rel_tol) else m
         return (a.is_null() & b.is_null()) | (a.is_not_null() & b.is_not_null() & m.fill_null(False))
 
     def _matched(
@@ -412,8 +545,19 @@ class _Comparison:
         merged = left.join(right, on=pk, how="inner", nulls_equal=True)
         return merged.with_columns([self._match_expr(c).alias(_M + c) for c in batch])
 
-    def _batches(self) -> Iterator[List[str]]:
+    def _batch_size(self, rows: Optional[int] = None) -> int:
+        """Colunas por lote. `rows` = linhas que o lote vai materializar (None = janela inteira).
+
+        Com poucas linhas divergentes (o caso comum) o lote cresce até caber em SUBSET_CELLS_BUDGET células:
+        menos consultas e menos semi joins por janela. `columns_per_batch` é o piso (comportamento antigo).
+        """
         n = self.s.columns_per_batch
+        if rows:
+            n = max(n, min(len(self.cols), SUBSET_CELLS_BUDGET // rows))
+        return max(n, 1)
+
+    def _batches(self, rows: Optional[int] = None) -> Iterator[List[str]]:
+        n = self._batch_size(rows)
         for i in range(0, len(self.cols), n):
             yield self.cols[i : i + n]
 
@@ -423,21 +567,20 @@ class _Comparison:
         """Divergências por coluna (e, se pedido, a união das chaves divergentes) em lotes de colunas."""
         counts: Dict[str, int] = {}
         unions: List[pl.DataFrame] = []
-        for batch in self._batches():
-            with_m = self._matched(lw, rw, batch, subset)
+        for batch in self._batches(subset.height if subset is not None else None):
             names = [_M + c for c in batch]
-            counts_lf = with_m.select(pl.len().alias("__n"), *[pl.col(n).not_().sum().alias(n) for n in names])
+            with_m = self._matched(lw, rw, batch, subset)
+            bad = pl.any_horizontal([pl.col(n).not_() for n in names])
+            # UMA consulta por lote: só as linhas com alguma divergência (chave + flags). Linhas iguais não
+            # contribuem para a contagem, então somar os flags dessas linhas dá a contagem por coluna e a
+            # própria chave dá a união das linhas divergentes.
+            flags = with_m.filter(bad).select([*self.pk, *names]).collect(engine="streaming")
+            # uma agregação por lote (em vez de um get_column/sum por coluna: eram milhares de chamadas Python)
+            bad_counts = flags.select([pl.col(n).not_().sum() for n in names]).row(0)
+            for c, v in zip(batch, bad_counts):
+                counts[c] = int(v or 0)
             if need_union:
-                pks_lf = (
-                    with_m.filter(pl.any_horizontal([pl.col(n).not_() for n in names])).select(self.pk).unique()
-                )
-                cdf, pdf = pl.collect_all([counts_lf, pks_lf], engine="streaming")
-                unions.append(pdf)
-            else:
-                cdf = counts_lf.collect(engine="streaming")
-            row = cdf.row(0, named=True)
-            for c, n in zip(batch, names):
-                counts[c] = int(row[n] or 0)
+                unions.append(flags.select(self.pk))
         union = None
         if need_union:
             union = pl.concat(unions, how="vertical").unique() if unions else pl.DataFrame()
@@ -452,23 +595,47 @@ class _Comparison:
         samples: Dict[str, List[List[Any]]],
     ) -> None:
         n = self.s.sample_count
-        for col in self.cols:
-            if counts.get(col, 0) == 0:
-                continue
-            have = samples.setdefault(col, [])
-            need = n - len(have)
-            if need <= 0:
-                continue
-            rows = (
-                self._matched(lw, rw, [col], subset)
-                .filter(pl.col(_M + col).not_())
-                .select([*self.pk, pl.col(col), pl.col(_R + col)])
-                .sort(self.pk)
-                .head(need)
-                .collect(engine="streaming")
-                .rows()
-            )
-            have.extend([list(r) for r in rows])
+        todo = [c for c in self.cols if counts.get(c, 0) > 0 and n - len(samples.setdefault(c, [])) > 0]
+        if not todo:
+            return
+        if subset.height > SAMPLE_BATCH_MAX_ROWS:  # muitas linhas divergentes: não materializar o lote inteiro
+            for col in todo:
+                self._sample_column(lw, rw, subset, col, samples)
+            return
+        step = self._batch_size(subset.height)
+        for i in range(0, len(todo), step):
+            batch = todo[i : i + step]
+            # uma consulta por lote (só as linhas divergentes da janela); as amostras saem do frame em memória
+            merged = self._matched(lw, rw, batch, subset).sort(self.pk).collect(engine="streaming")
+            # Extração por Series, SEM select/filter eager por coluna: cada DataFrame.select num frame de ~3x as
+            # colunas do lote (chave + valores + __r_ + __m_) monta e otimiza um plano lazy (~1-3 ms por chamada, medido
+            # com cProfile: ~1 s dos 3,3 s em 1M x 300). `get_column` e `gather` não passam pelo otimizador.
+            pk_series = [merged.get_column(k) for k in self.pk]
+            for col in batch:
+                need = n - len(samples[col])
+                idx = merged.get_column(_M + col).not_().arg_true().head(need)  # 1ª(s) linhas divergentes, na ordem da chave
+                if idx.len() == 0:
+                    continue
+                picked = [s.gather(idx) for s in (*pk_series, merged.get_column(col), merged.get_column(_R + col))]
+                samples[col].extend([list(r) for r in zip(*(p.to_list() for p in picked))])
+
+    def _sample_column(
+        self, lw: pl.LazyFrame, rw: pl.LazyFrame, subset: pl.DataFrame, col: str, samples: Dict[str, List[List[Any]]]
+    ) -> None:
+        have = samples.setdefault(col, [])
+        need = self.s.sample_count - len(have)
+        if need <= 0:
+            return
+        rows = (
+            self._matched(lw, rw, [col], subset)
+            .filter(pl.col(_M + col).not_())
+            .select([*self.pk, pl.col(col), pl.col(_R + col)])
+            .sort(self.pk)
+            .head(need)
+            .collect(engine="streaming")
+            .rows()
+        )
+        have.extend([list(r) for r in rows])
 
     # ------------------------------------------------------------------ resultado
     def _result(

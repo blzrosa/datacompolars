@@ -1,6 +1,6 @@
 [project]
 name = "datacompolars"
-version = "0.3.1"
+version = "0.4.3"
 description = "Comparação de DataFrames/arquivos em Polars escalável - com hash de linha, janelas por PK e relatório completo."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -58,6 +58,9 @@ dev = [
     "pytest>=8",
     "psutil>=5.9",
     "datacompy>=0.16",   # baseline dos benchmarks
+    "diffly>=1.4.1",
+    "pyarrow>=25.0.1",
+    "matplotlib>=3.11.2",
 ]
 
 [build-system]

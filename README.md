@@ -12,6 +12,7 @@ Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, m
 
 - [Instalação](#instalação)
 - [Início rápido](#início-rápido)
+- [Desempenho](#desempenho)
 - [Como funciona](#como-funciona)
 - [API](#api)
 - [Configuração](#configuração)
@@ -65,6 +66,28 @@ Há uma demonstração maior, com igualdade exata, tolerância e relatório HTML
 ```bash
 uv run python examples/demo.py
 ```
+
+## Desempenho
+
+Comparação com `datacompy` (Polars e pandas) e `diffly`, em igualdade exata, de 100 a 10 milhões de linhas e de 10 a 300 colunas (a curva **datacompolars** usa as configurações padrão):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/blzrosa/datacompolars/main/docs/benchmarks/images/time_vs_rows_dark.png">
+  <img alt="Tempo de comparação x tamanho do dataset" src="https://raw.githubusercontent.com/blzrosa/datacompolars/main/docs/benchmarks/images/time_vs_rows_light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/blzrosa/datacompolars/main/docs/benchmarks/images/memory_vs_rows_dark.png">
+  <img alt="Pico de memória x tamanho do dataset" src="https://raw.githubusercontent.com/blzrosa/datacompolars/main/docs/benchmarks/images/memory_vs_rows_light.png">
+</picture>
+
+| Linhas × colunas | datacompolars | datacompy (Polars) | datacompy (pandas) | diffly |
+|---|---:|---:|---:|---:|
+| 1.000.000 × 300 | **1,45 s** · 1,2 GB | 32,1 s · 10,6 GB (22×) | 82,0 s · 10,9 GB (56×) | 54,6 s · 10,1 GB (38×) |
+| 10.000.000 × 50 | **2,96 s** · 1,4 GB | 133 s · 11,5 GB (45×) | 123 s · 9,7 GB (42×) | 184 s · 11,7 GB (62×) |
+| 10.000.000 × 300 | **22,2 s** · 1,2 GB | — | — | — |
+
+Em 1M × 300 o datacompolars leva ~1,5 s com ~1,2 GB, contra 32 a 82 s e ~10 GB nas demais; com 10M de linhas o pico de memória fica em ~1,2 a 1,5 GB para qualquer número de colunas, e datacompy e diffly já não completam com 100 colunas (`—`). Tempo mediano · pico de memória (e quantas vezes mais lento que o datacompolars). Metodologia, tabelas completas e como reproduzir: [`docs/benchmarks`](https://github.com/blzrosa/datacompolars/tree/main/docs/benchmarks).
 
 ## Como funciona
 
@@ -248,7 +271,7 @@ Nulo com nulo é sempre igual; nulo de um lado só é diferença.
 
 | Valor | Efeito |
 |---|---|
-| `"auto"` | Liga as janelas acima de **20 milhões de linhas**, com janelas de ~**10 milhões** (constantes `AUTO_WINDOW_THRESHOLD_ROWS` e `AUTO_WINDOW_ROWS` em `settings.py`). Abaixo disso, usa janela única. |
+| `"auto"` | Dimensiona em **células** (linhas × colunas): até **30 milhões** de células usa janela única (mais rápida em tabelas pequenas ou estreitas, ex.: 1M × 10 colunas); acima disso fatia em janelas de ~**30 milhões de células** (no mínimo 100 mil linhas) e guarda cada janela em memória. Ex.: 300 colunas → 100 mil linhas por janela; 100 colunas → 300 mil; 10 colunas → 3 milhões. Constantes `AUTO_WINDOW_CELLS` e `AUTO_WINDOW_MIN_ROWS` em `settings.py`. |
 | inteiro `> 0` | Força janelas desse tamanho. |
 | `None` | Desliga o janelamento (janela única). |
 
@@ -413,6 +436,8 @@ Quando a comparação é abortada (por exemplo, chave duplicada), o veredito vir
 ```text
 datacompolars/
 ├─ pyproject.toml
+├─ docs/
+│  └─ benchmarks/          # resultados e gráficos do benchmark final (README, summary.md, images/, data/)
 ├─ examples/
 │  └─ demo.py              # demonstração de uso
 ├─ src/datacompolars/
@@ -436,11 +461,14 @@ datacompolars/
 └─ benchmarks/
    ├─ __init__.py
    ├─ datagen.py           # gerador de dados (módulo + CLI)
-   ├─ run.py               # benchmark datacompy x datacompolars
-   └─ results/             # saídas dos benchmarks
+   ├─ run.py               # uma engine em um dataset
+   ├─ suite.py             # grade linhas x colunas x engines
+   ├─ final_benchmark.py   # benchmark final padronizado (suite + gráficos)
+   ├─ plot.py              # gráficos e summary.md
+   └─ results/             # saídas dos benchmarks (locais)
 ```
 
-`tests/`, `benchmarks/` e `examples/` existem apenas no repositório do GitHub; o pacote publicado no PyPI contém só `src/datacompolars`.
+`tests/`, `benchmarks/`, `docs/` e `examples/` existem apenas no repositório do GitHub; o pacote publicado no PyPI contém só `src/datacompolars`.
 
 Os diretórios `data/` (datasets gerados) e `reports/` (relatórios salvos) são locais.
 
@@ -455,7 +483,7 @@ Marcadores disponíveis: `sas` (exige `polars-readstat`/`pyreadstat`) e `slow` (
 
 ## Benchmarks
 
-O baseline é o `datacompy` (instalado no grupo `dev`).
+Os resultados do benchmark final (gráficos, tabelas e metodologia) estão em [Desempenho](#desempenho) e em [`docs/benchmarks`](https://github.com/blzrosa/datacompolars/tree/main/docs/benchmarks). Os baselines são o `datacompy` e o `diffly` (instalados no grupo `dev`).
 
 **Geração de dados:**
 
@@ -476,6 +504,15 @@ uv run python benchmarks/run.py data/5000000_100cols_div1pct --engines hash_wind
 # com e sem common_keys_only (sufixo _common) em ids pouco sobrepostos
 uv run python benchmarks/run.py data/5000000_100cols_ov10pct --engines hash,hash_common --repeats 2
 ```
+
+**Benchmark final padronizado** (todas as engines em toda a grade, numa suíte nova; falhas já conhecidas são puladas):
+
+```bash
+uv run python benchmarks/final_benchmark.py             # grade completa + gráficos e summary.md (várias horas)
+uv run python benchmarks/final_benchmark.py --dry-run   # só mostra os comandos
+```
+
+Os resultados vão para `benchmarks/results/final_version/`; para publicá-los, copie os PNGs, o `summary.md` e os dados para `docs/benchmarks/`.
 
 ## Licença
 

@@ -40,7 +40,8 @@ STRINGS = np.array(["aaa", "bbb", "ccc"])
 
 
 def column_names(n: int) -> List[str]:
-    names = ["".join(p) for p in product(string.ascii_lowercase, repeat=2)]
+    # "id" é reservado para a chave primária: pular, senão a coluna 212 colide com ele
+    names = [n for n in ("".join(p) for p in product(string.ascii_lowercase, repeat=2)) if n != "id"]
     if not 1 <= n <= len(names):
         raise ValueError(f"cols deve estar entre 1 e {len(names)}")
     return names[:n]
