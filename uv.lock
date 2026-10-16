@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -280,15 +280,15 @@ wheels = [
 
 [[package]]
 name = "diffly"
-version = "1.4.1"
+version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "polars" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/10/ef4e941b6c101dbe2cf8331fec6b646ac40c3148e88c2e6b7370c762b95a/diffly-1.4.1.tar.gz", hash = "sha256:7fcb852b83b20552155024989bbb55152850d1b1f359c3e207ecdaa8df47e554", size = 265625, upload-time = "2026-08-31T19:33:59.775Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fd/e0/ea7ebf29f6b3e7f4e6fe5bc6b57bc420d56b971a426f7c4ad62dc46f418b/diffly-1.5.0.tar.gz", hash = "sha256:8f15e2890a8a783cb4594011f7198efc741f322977c90d6f9fd38631d5a3e935", size = 296895, upload-time = "2026-10-08T23:53:39.959Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/03/13a72328374df2157b7baadddd45723642ee9c77d4aa98e2ca07c8c44bff/diffly-1.4.1-py3-none-any.whl", hash = "sha256:b02fbe15c4972c8ecde5c881f0431bee74ffabee92ae67198b66541351c359a4", size = 37714, upload-time = "2026-08-31T19:33:58.276Z" },
+    { url = "https://files.pythonhosted.org/packages/56/4a/29a53d8fbc39ee6a02838d160215bcde4a401265231c42dacf5ac628a60f/diffly-1.5.0-py3-none-any.whl", hash = "sha256:d3e32a067c52a4ff1eefc6000773209f176886d1551d4e82cd128c19aa98720f", size = 38009, upload-time = "2026-10-08T23:53:38.082Z" },
 ]
 
 [[package]]
