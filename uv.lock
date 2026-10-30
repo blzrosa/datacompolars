@@ -1,15 +1,15 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -280,15 +280,15 @@ wheels = [
 
 [[package]]
 name = "diffly"
-version = "1.4.1"
+version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "polars" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/10/ef4e941b6c101dbe2cf8331fec6b646ac40c3148e88c2e6b7370c762b95a/diffly-1.4.1.tar.gz", hash = "sha256:7fcb852b83b20552155024989bbb55152850d1b1f359c3e207ecdaa8df47e554", size = 265625, upload-time = "2026-08-31T19:33:59.775Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/6b/5aa597c5bd9d37bc5798a033b9161de246130e8d64bd3833a610247d14f8/diffly-1.6.0.tar.gz", hash = "sha256:d65ca2dc3dfab657badf635cbae85c83c677563e9966c187038c859bd8cb787c", size = 300413, upload-time = "2026-10-26T17:06:53.03Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/03/13a72328374df2157b7baadddd45723642ee9c77d4aa98e2ca07c8c44bff/diffly-1.4.1-py3-none-any.whl", hash = "sha256:b02fbe15c4972c8ecde5c881f0431bee74ffabee92ae67198b66541351c359a4", size = 37714, upload-time = "2026-08-31T19:33:58.276Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/0f/3514ead1d2de17199389c35c27c7766bffdcd440471e120cab4a82cf1718/diffly-1.6.0-py3-none-any.whl", hash = "sha256:4e94836e118ba747f1b7578c6ceb00f2167c744c6624e9657a877e52f9fbd742", size = 38284, upload-time = "2026-10-26T17:06:51.194Z" },
 ]
 
 [[package]]
