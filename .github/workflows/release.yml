@@ -1,0 +1,121 @@
+name: release
+
+# Publica o datacompolars (pacote só Python: um wheel py3-none-any e o sdist):
+# - no TestPyPI: Actions -> release -> Run workflow -> publish = testpypi (depois instala do TestPyPI em máquinas
+#   limpas, com o Python mais antigo e o mais novo suportados, e roda uma comparação de verdade);
+# - no PyPI: ao publicar uma release no GitHub (a tag v<versão> deve bater com a versão do pyproject.toml).
+# Publicação confiável (OIDC, sem senha nem token): no PyPI e no TestPyPI, em "Publishing", cadastre o "trusted
+# publisher" com dono blzrosa, repositório datacompolars, workflow release.yml e ambiente pypi / testpypi (crie os
+# dois ambientes também no GitHub: Settings -> Environments).
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publicar em"
+        type: choice
+        options: [none, testpypi]
+        default: none
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - name: versão do pyproject.toml
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)" >> "$GITHUB_OUTPUT"
+      - name: a tag da release bate com a versão
+        if: github.event_name == 'release'
+        run: |
+          if [ "${{ github.event.release.tag_name }}" != "v${{ steps.version.outputs.version }}" ]; then
+            echo "tag ${{ github.event.release.tag_name }} != v${{ steps.version.outputs.version }}"; exit 1
+          fi
+      - run: uv lock --check
+      - run: uv run --exact pytest -q
+      - run: uv build
+      - run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # instala do TestPyPI numa máquina limpa (sem o repositório) e compara duas tabelas
+  smoke-testpypi:
+    needs: [build, publish-testpypi]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: instala do TestPyPI (as dependências vêm do PyPI)
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # o índice do TestPyPI passa por um cache (CDN) que pode levar uns minutos para mostrar a versão nova
+          for i in $(seq 1 30); do
+            python -m pip install --no-cache-dir --index-url https://test.pypi.org/simple/ \
+              --extra-index-url https://pypi.org/simple/ "datacompolars==$VERSION" && break
+            echo "ainda não disponível no índice (tentativa $i de 30); tentando de novo em 30 s"; sleep 30
+          done
+          python -m pip show datacompolars
+      - name: compara
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python - <<'PY'
+          import polars as pl
+          from datacompolars import CompareSettings, compare
+
+          a = pl.DataFrame({"id": [1, 2, 3], "v": [1.0, 2.0, 3.0]})
+          b = pl.DataFrame({"id": [1, 2, 3], "v": [1.0, 2.5, 3.0]})
+          r = compare(a, b, CompareSettings(join_columns=["id"]))
+          assert r.rows.mismatched == 1, r.rows
+          print("ok")
+          PY
+
+  publish-pypi:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -24,14 +24,14 @@ Comparação de DataFrames e arquivos em **Polars**, no estilo do `datacompy`, m
 
 ## Instalação
 
-Requisitos: Python **>= 3.11**, `polars >= 1.30`, `pydantic >= 2.7`.
+Requisitos: Python **>= 3.10**, `polars >= 1.30`, `pydantic >= 2.7`.
 
 ```bash
 pip install datacompolars
 pip install "datacompolars[sas]"   # opcional: leitura de .sas7bdat/.xpt
 ```
 
-Para desenvolver (núcleo + grupo dev com pytest, psutil e datacompy):
+Para desenvolver (núcleo + grupo dev com pytest, psutil e, no Python >= 3.11, os baselines dos benchmarks):
 
 ```bash
 git clone https://github.com/blzrosa/datacompolars.git
@@ -483,7 +483,7 @@ Marcadores disponíveis: `sas` (exige `polars-readstat`/`pyreadstat`) e `slow` (
 
 ## Benchmarks
 
-Os resultados do benchmark final (gráficos, tabelas e metodologia) estão em [Desempenho](#desempenho) e em [`docs/benchmarks`](https://github.com/blzrosa/datacompolars/tree/main/docs/benchmarks). Os baselines são o `datacompy` e o `diffly` (instalados no grupo `dev`).
+Os resultados do benchmark final (gráficos, tabelas e metodologia) estão em [Desempenho](#desempenho) e em [`docs/benchmarks`](https://github.com/blzrosa/datacompolars/tree/main/docs/benchmarks). Os baselines são o `datacompy` e o `diffly` (instalados no grupo `dev` quando o Python é >= 3.11; os benchmarks de comparação precisam dele).
 
 **Geração de dados:**
 

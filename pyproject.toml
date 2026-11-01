@@ -1,9 +1,9 @@
 [project]
 name = "datacompolars"
-version = "0.4.3"
+version = "0.4.4"
 description = "Comparação de DataFrames/arquivos em Polars escalável - com hash de linha, janelas por PK e relatório completo."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
@@ -27,6 +27,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -54,13 +55,16 @@ sas = [
 ]
 
 [dependency-groups]
+# O pacote roda em Python >= 3.10. Os baselines dos benchmarks (datacompy, diffly) e os gráficos (matplotlib) só
+# entram no Python >= 3.11: num ambiente 3.10, `uv sync` instala o resto e os benchmarks de comparação não rodam.
 dev = [
     "pytest>=8",
     "psutil>=5.9",
-    "datacompy>=0.16",   # baseline dos benchmarks
-    "diffly>=1.4.1",
-    "pyarrow>=25.0.1",
-    "matplotlib>=3.11.2",
+    "numpy>=1.24",   # benchmarks/datagen.py (gera os dados de alguns testes); antes vinha junto dos baselines
+    "datacompy>=0.16; python_version >= '3.11'",   # baseline dos benchmarks
+    "diffly>=1.4.1; python_version >= '3.11'",
+    "pyarrow>=25.0.1; python_version >= '3.11'",
+    "matplotlib>=3.11.2; python_version >= '3.11'",
 ]
 
 [build-system]
