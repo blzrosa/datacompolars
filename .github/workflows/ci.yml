@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.3
 
       # Núcleo: --exact remove qualquer pacote fora das dependências declaradas,
       # então polars-readstat/pyreadstat/pandas NÃO ficam instalados e test_sas.py é pulado.
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - name: uv.lock em dia com o pyproject.toml
         run: uv lock --check
