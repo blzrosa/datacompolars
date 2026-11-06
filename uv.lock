@@ -1,15 +1,15 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version < '3.11'",
 ]
@@ -269,7 +269,7 @@ dev = [
 
 [[package]]
 name = "datacompy"
-version = "1.1.0"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
@@ -279,9 +279,9 @@ dependencies = [
     { name = "pandas", version = "3.0.6", source = { registry = "https://pypi.org/simple" } },
     { name = "polars", extra = ["pandas"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/df/a67e0c1fa7f9fb2cace0f17d4e7e49f95b8a25238e6a016c13d02fa92b22/datacompy-1.1.0.tar.gz", hash = "sha256:244d53328568c457532b1472ec98f8de84ba237ed4e8f30775880a1182ee6b36", size = 148548, upload-time = "2026-09-30T00:27:59.22Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/01/88879fda3c32421885e9bc112147539f4c1547b50c0374bbaf85c157309c/datacompy-1.2.0.tar.gz", hash = "sha256:62d2bdc18b2b889d25a4f28f9b7dde850c59e9fc1deec3c49a7facd859b8eb6e", size = 153662, upload-time = "2026-10-27T11:44:22.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/b1/2362ee7dc29b358e2a42625e38e28b3bb42cf4833cca642ef8d830b444ce/datacompy-1.1.0-py3-none-any.whl", hash = "sha256:3e432f082d29576a9632b1d8fd43a3d97d271dc422ccc7f287365bb65508841b", size = 100718, upload-time = "2026-09-30T00:27:57.609Z" },
+    { url = "https://files.pythonhosted.org/packages/52/60/b8e9cad5a3a697e9acf666769f83592e0871756eec83f198fcea7f7d8e37/datacompy-1.2.0-py3-none-any.whl", hash = "sha256:7775271f351a1c7b6ac112ca8887fefda17cbbef3bc47cd92d1d46c54a817062", size = 102367, upload-time = "2026-10-27T11:44:20.999Z" },
 ]
 
 [[package]]
@@ -1052,10 +1052,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
